@@ -37,6 +37,7 @@ glyph!(COPY, r#"<rect x="5" y="5" width="8.5" height="9" rx="1"/><path d="M3 11V
 glyph!(PASTE, r#"<rect x="3" y="3" width="10" height="11" rx="1"/><path d="M6 3V2h4v1M5.5 7h5M5.5 10h3"/>"#);
 glyph!(RENAME, r#"<path d="M2.5 13.5h3l7.5-7.5-3-3-7.5 7.5zM8.5 4.5l3 3"/>"#);
 glyph!(TRASH, r#"<path d="M2.5 4h11M6 4V2.5h4V4M4 4l.7 9.5h6.6L12 4M6.5 6.5v5M9.5 6.5v5"/>"#);
+glyph!(RESTORE, r#"<path d="M3.5 6.5h6.5a3.5 3.5 0 0 1 0 7H6"/><path d="M6 3.5 3 6.5l3 3"/>"#);
 glyph!(LINK, r#"<path d="M6.5 9.5a3 3 0 0 0 4.2 0l2.1-2.1a3 3 0 0 0-4.2-4.2L7.8 4M9.5 6.5a3 3 0 0 0-4.2 0L3.2 8.6a3 3 0 0 0 4.2 4.2l.8-.8"/>"#);
 glyph!(INFO, r#"<circle cx="8" cy="8" r="6"/><path d="M8 7.5v4M8 5v.2"/>"#);
 glyph!(SELECT_ALL, r#"<rect x="2.5" y="2.5" width="11" height="11" rx="1.5" stroke-dasharray="2 1.5"/><path d="m5.5 8 2 2 3.5-4"/>"#);

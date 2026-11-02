@@ -19,10 +19,14 @@ use std::time::UNIX_EPOCH;
 const WALK_LIMIT: usize = 500_000;
 
 /// Split a virtual path into validated components. Rejects `..`.
-fn components(virt: &str) -> ApiResult<Vec<String>> {
+pub(crate) fn components(virt: &str) -> ApiResult<Vec<String>> {
     let mut out = Vec::new();
     for c in Path::new(virt).components() {
         match c {
+            // The Trash folder is only reachable through the Trash API.
+            Component::Normal(s) if out.is_empty() && s == crate::trash::DIR => {
+                return Err(ApiError::not_found("No such file or folder"))
+            }
             Component::Normal(s) => out.push(s.to_string_lossy().into_owned()),
             Component::RootDir | Component::CurDir => {}
             Component::ParentDir | Component::Prefix(_) => {
@@ -83,6 +87,9 @@ fn check_name(raw: &str) -> ApiResult<String> {
     if name.is_empty() || name == "." || name == ".." || name.contains(['\0', '/', '\\']) {
         return Err(ApiError::bad_request("Invalid name"));
     }
+    if name == crate::trash::DIR {
+        return Err(ApiError::bad_request("That name is reserved for the Trash"));
+    }
     if name.len() > 255 {
         return Err(ApiError::bad_request("Name is too long"));
     }
@@ -127,20 +134,48 @@ pub fn make_upload_dirs(root: &Path, base: &Path, dirs: &[String]) -> ApiResult<
     Ok(path)
 }
 
-/// `dir/name` if free, otherwise `dir/stem (1).ext`, `dir/stem (2).ext`, ...
-pub fn unique_path(dir: &Path, name: &str) -> PathBuf {
-    let candidate = dir.join(name);
-    if fs::symlink_metadata(&candidate).is_err() {
-        return candidate;
-    }
+/// `name`, then `stem (1).ext`, `stem (2).ext`, ... (endless).
+fn name_candidates(name: &str) -> impl Iterator<Item = String> + '_ {
     let (stem, ext) = match name.rfind('.') {
         Some(i) if i > 0 => (&name[..i], &name[i..]),
         _ => (name, ""),
     };
-    (1..)
-        .map(|n| dir.join(format!("{stem} ({n}){ext}")))
+    std::iter::once(name.to_string()).chain((1..).map(move |n| format!("{stem} ({n}){ext}")))
+}
+
+/// `dir/name` if free, otherwise `dir/stem (1).ext`, `dir/stem (2).ext`, ...
+pub fn unique_path(dir: &Path, name: &str) -> PathBuf {
+    name_candidates(name)
+        .map(|n| dir.join(n))
         .find(|p| fs::symlink_metadata(p).is_err())
         .expect("infinite iterator")
+}
+
+/// Lower-case hex SHA-256 of a digest's bytes.
+pub fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+pub fn file_sha256(path: &Path) -> io::Result<String> {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    io::copy(&mut fs::File::open(path)?, &mut hasher)?;
+    Ok(hex(&hasher.finalize()))
+}
+
+/// A file in `dir` called `name` or `name (n)` with exactly this content.
+/// When a retried upload's first attempt did arrive (only the answer was
+/// lost), this finds it, so the retry doesn't create a duplicate. Stops at
+/// the first free name, as an earlier attempt can't be beyond it.
+pub fn find_identical(dir: &Path, name: &str, size: u64, sha256: &str) -> Option<PathBuf> {
+    for candidate in name_candidates(name).take(1000) {
+        let path = dir.join(candidate);
+        let meta = fs::symlink_metadata(&path).ok()?;
+        if meta.is_file() && meta.len() == size && file_sha256(&path).ok()? == sha256 {
+            return Some(path);
+        }
+    }
+    None
 }
 
 /// Rename `src` to `dst`, failing with `AlreadyExists` instead of replacing
@@ -187,13 +222,34 @@ pub fn rename_unique(src: &Path, dir: &Path, name: &str) -> io::Result<PathBuf> 
 
 static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
+const TEMP_PREFIX: &str = ".narwhal-upload-";
+
+/// An upload's temp file. Hidden from listings and searches.
+fn is_upload_temp(name: &str) -> bool {
+    name.starts_with(TEMP_PREFIX) && name.ends_with(".part")
+}
+
+/// Temp files of uploads that were cut off by a server restart are left
+/// behind (a live upload's temp file is written to all the time). Remove
+/// them once they are a day old, whenever their folder is listed.
+fn remove_if_stale(path: &Path) {
+    let old = fs::symlink_metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.elapsed().ok())
+        .is_some_and(|age| age.as_secs() > 86_400);
+    if old {
+        let _ = fs::remove_file(path);
+    }
+}
+
 /// Create a fresh hidden temp file in `dir` for an upload. `create_new`
 /// refuses anything already at that path, including a planted symlink, so the
 /// data can never be written somewhere else.
 pub fn create_temp(dir: &Path) -> io::Result<(fs::File, PathBuf)> {
     for _ in 0..100 {
         let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
-        let path = dir.join(format!(".narwhal-upload-{}-{seq}.part", std::process::id()));
+        let path = dir.join(format!("{TEMP_PREFIX}{}-{seq}.part", std::process::id()));
         match fs::OpenOptions::new().write(true).create_new(true).open(&path) {
             Ok(f) => return Ok((f, path)),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
@@ -255,6 +311,13 @@ pub fn list_dir(root: &Path, virt: &str) -> ApiResult<Listing> {
     let mut entries = Vec::new();
     for de in fs::read_dir(&dir)?.flatten() {
         let name = de.file_name().to_string_lossy().into_owned();
+        if dir == root && name == crate::trash::DIR {
+            continue;
+        }
+        if is_upload_temp(&name) {
+            remove_if_stale(&de.path());
+            continue;
+        }
         let vpath = vjoin(&vdir, &name);
         if let Some(e) = entry_for(&de.path(), name, vpath) {
             entries.push(e);
@@ -318,7 +381,7 @@ pub fn rename(root: &Path, req: &RenameReq) -> ApiResult<String> {
     Ok(vjoin(&vparent, &name))
 }
 
-fn remove_any(path: &Path) -> io::Result<()> {
+pub(crate) fn remove_any(path: &Path) -> io::Result<()> {
     let meta = fs::symlink_metadata(path)?;
     if meta.is_dir() {
         fs::remove_dir_all(path)
@@ -477,6 +540,9 @@ pub fn search(root: &Path, virt: &str, query: &str, limit: usize) -> ApiResult<V
                 return Ok(out);
             }
             let name = de.file_name().to_string_lossy().into_owned();
+            if (dir == root && name == crate::trash::DIR) || is_upload_temp(&name) {
+                continue;
+            }
             let vpath = vjoin(&vdir, &name);
             let is_real_dir = de.file_type().map(|t| t.is_dir()).unwrap_or(false);
             if name.to_lowercase().contains(&needle) {
@@ -513,6 +579,9 @@ pub fn size_of(root: &Path, virt: &str) -> ApiResult<SizeReport> {
             visited += 1;
             if visited > WALK_LIMIT {
                 return Ok(report);
+            }
+            if dir == root && de.file_name() == crate::trash::DIR {
+                continue;
             }
             let Ok(m) = de.metadata() else { continue }; // DirEntry::metadata does not follow symlinks
             if m.is_dir() {
@@ -573,6 +642,35 @@ pub fn places(root: &Path, root_name: &str, configured: &[Place]) -> Vec<Place> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn identical_files_are_found_by_content() {
+        let (_t, root) = setup();
+        let dir = root.join("docs");
+        let hash = file_sha256(&dir.join("a.txt")).unwrap();
+        assert_eq!(hash, "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
+        assert_eq!(find_identical(&dir, "a.txt", 5, &hash), Some(dir.join("a.txt")));
+        // Another file under the name: the copy is found as "a (1).txt".
+        fs::write(dir.join("a.txt"), b"other").unwrap();
+        assert_eq!(find_identical(&dir, "a.txt", 5, &hash), None);
+        fs::write(dir.join("a (1).txt"), b"hello").unwrap();
+        assert_eq!(find_identical(&dir, "a.txt", 5, &hash), Some(dir.join("a (1).txt")));
+        assert_eq!(find_identical(&dir, "new.txt", 5, &hash), None);
+    }
+
+    #[test]
+    fn upload_temps_are_hidden_and_stale_ones_removed() {
+        let (_t, root) = setup();
+        let (_f, live) = create_temp(&root.join("docs")).unwrap();
+        let stale = root.join("docs/.narwhal-upload-1-1.part");
+        fs::write(&stale, b"x").unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 86_400);
+        fs::File::options().write(true).open(&stale).unwrap().set_modified(old).unwrap();
+        let names: Vec<_> = list_dir(&root, "/docs").unwrap().entries.into_iter().map(|e| e.name).collect();
+        assert_eq!(names.len(), 2, "{names:?}");
+        assert!(live.exists());
+        assert!(!stale.exists());
+    }
 
     fn setup() -> (tempfile::TempDir, PathBuf) {
         let tmp = tempfile::tempdir().unwrap();

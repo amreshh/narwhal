@@ -20,8 +20,15 @@ One container, one port, ~30 MB image, ~350 KB of gzipped WASM.
   - drag items onto any folder in any column; right-click works in every column
 - **Split view** (F3) with independent history per pane; drag between panes to move, hold Ctrl to copy
 - **Selection** like a desktop: click, Ctrl+click, Shift+click, arrow keys, Ctrl+A
-- **File operations**: new folder/file, inline rename (F2), cut/copy/paste, delete with confirmation,
-  upload (button or drag files from your desktop, with progress), download, open in a new tab
+- **Trash**: Delete moves items to the Trash (with Undo); restore them to where they were, delete
+  them for good, or empty it. Shift+Delete skips the Trash. Old items are removed after 30 days
+- **File operations**: new folder/file, inline rename (F2), cut/copy/paste, delete,
+  upload (button or drag files and folders from your desktop), download, open in a new tab
+- **Reliable uploads**: every file is checked against a SHA-256 checksum on the server and only
+  appears once it arrived intact; interrupted, stalled or damaged files are retried automatically
+  (also after the network drops for a while). Several files go up in parallel (adjustable), and
+  files added during an upload join its queue.
+  Click the upload bar for each file's state, the speed and time left
 - **Filter bar** (Ctrl+I) and **recursive name search** (Ctrl+F)
 - **Properties** dialog with recursive folder size and permissions
 - Hidden files toggle, natural sorting (`file2` before `file10`), light/dark theme from the OS,
@@ -106,8 +113,11 @@ With a ReadWriteOnce volume keep `replicas: 1` (strategy `Recreate`).
 | `NARWHAL_ROOT` | `/data` | Directory to serve. Nothing outside it is reachable. |
 | `NARWHAL_ROOT_NAME` | `Storage` | Name shown for the root in the sidebar and breadcrumb. |
 | `NARWHAL_READ_ONLY` | `false` | `true` rejects every write (upload, rename, delete, …). |
+| `NARWHAL_TRASH` | `true` | `false` makes Delete remove items permanently (after a confirmation). Trashed items live in `.narwhal-trash` in the root, on the same volume. |
+| `NARWHAL_TRASH_DAYS` | `30` | Items older than this are removed from the Trash (checked hourly); `0` = keep forever. |
 | `NARWHAL_PLACES` | *(empty)* | Fixed sidebar entries: `Docs=/documents,Media=/media`. Empty = top-level folders. |
-| `NARWHAL_MAX_UPLOAD_MB` | `0` | Request body limit for uploads; `0` = unlimited. |
+| `NARWHAL_UPLOAD_PARALLEL` | `3` | Default number of files the app uploads at once (1–16). Users can change it for their browser in the menu or the upload panel. |
+| `NARWHAL_MAX_UPLOAD_MB` | `0` | Largest file that can be uploaded; `0` = unlimited. |
 | `NARWHAL_STATIC_DIR` | `./static` | Built frontend (`/app/static` in the image). |
 | `NARWHAL_ALLOWED_HOSTS` | *(empty)* | Comma-separated host names the server answers to, e.g. `files.example.com,localhost`. Other hosts get 403 (blocks DNS rebinding). Empty = any. `/healthz` is always allowed. |
 | `NARWHAL_BIND` | `[::]:8080` | Listen address. The default accepts IPv4 and IPv6 (falls back to IPv4 if IPv6 is disabled); `0.0.0.0:8080` forces IPv4 only. |
@@ -126,6 +136,8 @@ With a ReadWriteOnce volume keep `replicas: 1` (strategy `Recreate`).
   point outside the root are refused.
 - Files opened "in a new tab" are served with `Content-Security-Policy: sandbox`
   and `nosniff`, so an uploaded HTML or SVG file cannot run scripts against the app.
+  PDFs are the exception (browser PDF viewers refuse sandboxed pages and isolate
+  PDF scripts themselves); only the app itself may embed them, for the preview.
 - Uploads are written to a hidden temp file and renamed into place; name clashes
   get ` (1)`, ` (2)`… suffixes rather than overwriting. Uploads, copies, moves and
   renames never replace an existing file.
@@ -141,11 +153,15 @@ All endpoints take and return JSON; paths are virtual (`/` = the root).
 | GET | `/api/search?path=&q=` | recursive name search (max 500 results) |
 | GET | `/api/size?path=` | recursive size |
 | GET | `/api/download?path=[&inline=true]` | file download (supports Range) |
-| POST | `/api/upload?path=` | multipart, one or more `file` fields |
+| PUT | `/api/upload?path=&rel=&size=&sha256=[&retry=true]` | one file as the raw body; `rel` may include folders (created as needed); kept only if size and SHA-256 match |
 | POST | `/api/mkdir`, `/api/touch` | `{ "path": parent, "name": … }` |
 | POST | `/api/rename` | `{ "path": …, "new_name": … }` |
 | POST | `/api/transfer` | `{ "paths": [...], "dest": folder, "op": "copy" \| "move" }` |
-| POST | `/api/delete` | `{ "paths": [...] }` |
+| POST | `/api/delete` | `{ "paths": [...] }` — deletes permanently |
+| GET | `/api/trash` | items in the Trash (id, original path, deletion time) |
+| POST | `/api/trash` | `{ "paths": [...] }` — move to the Trash |
+| POST | `/api/trash/restore`, `/api/trash/purge` | `{ "ids": [...] }` — put back / delete for good |
+| POST | `/api/trash/empty` | empty the Trash |
 | GET | `/healthz` | liveness/readiness |
 
 ## Known limitations

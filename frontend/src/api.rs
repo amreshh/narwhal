@@ -5,10 +5,11 @@ use gloo_net::http::{Request, Response};
 use serde::{de::DeserializeOwned, Serialize};
 use narwhal_shared::{
     CreateReq, DeleteReq, Entry, ErrorBody, Info, Listing, OpReport, RenameReq, SizeReport,
-    TransferOp, TransferReq,
+    TransferOp, TransferReq, TrashItem, TrashReq,
 };
 use wasm_bindgen::{prelude::*, JsCast};
-use web_sys::{FormData, ProgressEvent, XmlHttpRequest};
+use std::{cell::Cell, rc::Rc};
+use web_sys::{ProgressEvent, XmlHttpRequest};
 
 pub type ApiResult<T> = Result<T, String>;
 
@@ -83,6 +84,28 @@ pub async fn transfer(paths: Vec<String>, dest: &str, op: TransferOp) -> ApiResu
     post("api/transfer", &TransferReq { paths, dest: dest.into(), op }).await
 }
 
+pub async fn trash_list() -> ApiResult<Vec<TrashItem>> {
+    get("api/trash").await
+}
+
+/// Move items to the Trash; the report's `ids` are their Trash ids.
+pub async fn trash(paths: Vec<String>) -> ApiResult<OpReport> {
+    post("api/trash", &DeleteReq { paths }).await
+}
+
+/// Put Trash items back; the report's `ids` are the restored paths.
+pub async fn trash_restore(ids: Vec<String>) -> ApiResult<OpReport> {
+    post("api/trash/restore", &TrashReq { ids }).await
+}
+
+pub async fn trash_purge(ids: Vec<String>) -> ApiResult<OpReport> {
+    post("api/trash/purge", &TrashReq { ids }).await
+}
+
+pub async fn trash_empty() -> ApiResult<OpReport> {
+    post("api/trash/empty", &()).await
+}
+
 pub fn download_url(path: &str, inline: bool) -> String {
     format!("api/download?path={}{}", enc(path), if inline { "&inline=true" } else { "" })
 }
@@ -102,51 +125,104 @@ pub async fn head_bytes(path: &str, n: u64) -> ApiResult<Vec<u8>> {
     Ok(bytes)
 }
 
-/// Upload files with XHR so we get progress events (fetch has none for uploads).
-/// Each file comes with its path relative to `dir`; for files inside folders
-/// (`photos/2024/a.jpg`) the server creates the folders.
-pub async fn upload(
-    dir: &str,
-    files: Vec<(String, web_sys::File)>,
-    on_progress: impl Fn(f64) + 'static,
-) -> ApiResult<OpReport> {
-    let form = FormData::new().map_err(js_err)?;
-    for (rel, f) in &files {
-        if rel.contains('/') {
-            form.append_with_str("path", rel).map_err(js_err)?;
-        }
-        form.append_with_blob_and_filename("file", f, &f.name()).map_err(js_err)?;
-    }
-    let xhr = XmlHttpRequest::new().map_err(js_err)?;
-    xhr.open_with_async("POST", &format!("api/upload?path={}", enc(dir)), true)
-        .map_err(js_err)?;
+/// Why sending a file failed.
+pub enum SendError {
+    /// Worth another try: the connection broke, the server was briefly
+    /// unavailable, or the data arrived damaged (`damaged`).
+    Retry { msg: String, damaged: bool },
+    /// Trying again won't help (e.g. read-only storage, invalid name).
+    Fatal(String),
+}
 
-    let progress = Closure::<dyn FnMut(ProgressEvent)>::new(move |e: ProgressEvent| {
-        if e.length_computable() && e.total() > 0.0 {
-            on_progress(e.loaded() / e.total());
-        }
-    });
-    xhr.upload()
-        .map_err(js_err)?
-        .set_onprogress(Some(progress.as_ref().unchecked_ref()));
+/// How long an upload may go without progress before it is given up on.
+const STALL_MS: f64 = 60_000.0;
+
+/// Upload one file to `dir` (as `rel`, which may include folders) with its
+/// SHA-256; the server keeps it only if it arrives intact. Uses XHR for
+/// upload progress (fetch has none). `on_progress` gets the bytes sent.
+pub async fn upload_file(
+    dir: &str,
+    rel: &str,
+    file: &web_sys::File,
+    sha256: &str,
+    retry: bool,
+    on_progress: impl Fn(f64) + 'static,
+) -> Result<String, SendError> {
+    let fatal = |e: JsValue| SendError::Fatal(js_err(e));
+    let url = format!(
+        "api/upload?path={}&rel={}&size={}&sha256={sha256}{}",
+        enc(dir),
+        enc(rel),
+        file.size() as u64,
+        if retry { "&retry=true" } else { "" }
+    );
+    let xhr = XmlHttpRequest::new().map_err(fatal)?;
+    xhr.open_with_async("PUT", &url, true).map_err(fatal)?;
+    xhr.set_request_header("Content-Type", "application/octet-stream").map_err(fatal)?;
+
+    // Watchdog: a connection can hang without failing. Abort if nothing
+    // moves for a while; it is retried like any broken connection.
+    let last = Rc::new(Cell::new(js_sys::Date::now()));
+    let stalled = Rc::new(Cell::new(false));
+    let progress = {
+        let last = last.clone();
+        Closure::<dyn FnMut(ProgressEvent)>::new(move |e: ProgressEvent| {
+            last.set(js_sys::Date::now());
+            on_progress(e.loaded());
+        })
+    };
+    // Once everything is sent the server still checks and syncs the file,
+    // which can take a moment without progress events.
+    let sent = {
+        let last = last.clone();
+        Closure::<dyn FnMut()>::new(move || last.set(f64::INFINITY))
+    };
+    let up = xhr.upload().map_err(fatal)?;
+    up.set_onprogress(Some(progress.as_ref().unchecked_ref()));
+    up.set_onload(Some(sent.as_ref().unchecked_ref()));
+    let watchdog = {
+        let (xhr, stalled) = (xhr.clone(), stalled.clone());
+        leptos::prelude::set_interval_with_handle(
+            move || {
+                if js_sys::Date::now() - last.get() > STALL_MS {
+                    stalled.set(true);
+                    let _ = xhr.abort();
+                }
+            },
+            std::time::Duration::from_secs(5),
+        )
+        .ok()
+    };
 
     let finished = js_sys::Promise::new(&mut |resolve, reject| {
         xhr.set_onload(Some(&resolve));
         xhr.set_onerror(Some(&reject));
         xhr.set_onabort(Some(&reject));
     });
-    xhr.send_with_opt_form_data(Some(&form)).map_err(js_err)?;
-    let outcome = wasm_bindgen_futures::JsFuture::from(finished).await;
-    drop(progress);
-    outcome.map_err(|_| "Upload failed: the connection was interrupted".to_string())?;
-
-    let status = xhr.status().map_err(js_err)?;
-    let text = xhr.response_text().map_err(js_err)?.unwrap_or_default();
-    if (200..300).contains(&status) {
-        serde_json::from_str(&text).map_err(|e| e.to_string())
-    } else {
-        Err(serde_json::from_str::<ErrorBody>(&text)
-            .map(|b| b.error)
-            .unwrap_or_else(|_| format!("Upload failed (HTTP {status})")))
+    let outcome = match xhr.send_with_opt_blob(Some(file)) {
+        Ok(()) => wasm_bindgen_futures::JsFuture::from(finished).await.map(|_| ()),
+        Err(e) => Err(e),
+    };
+    if let Some(w) = watchdog {
+        w.clear();
     }
+    drop((progress, sent));
+    if outcome.is_err() {
+        let msg = if stalled.get() { "The connection stalled" } else { "The connection was interrupted" };
+        return Err(SendError::Retry { msg: msg.into(), damaged: false });
+    }
+
+    let status = xhr.status().unwrap_or(0);
+    let text = xhr.response_text().ok().flatten().unwrap_or_default();
+    if (200..300).contains(&status) {
+        return serde_json::from_str(&text).map_err(|e| SendError::Retry { msg: e.to_string(), damaged: false });
+    }
+    let msg = serde_json::from_str::<ErrorBody>(&text)
+        .map(|b| b.error)
+        .unwrap_or_else(|_| format!("Upload failed (HTTP {status})"));
+    Err(match status {
+        422 => SendError::Retry { msg, damaged: true },
+        0 | 408 | 429 | 500..=599 => SendError::Retry { msg, damaged: false },
+        _ => SendError::Fatal(msg),
+    })
 }

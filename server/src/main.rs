@@ -3,21 +3,22 @@
 
 mod error;
 mod fsops;
+mod trash;
 
 use axum::{
     body::Body,
-    extract::{multipart::Field, DefaultBodyLimit, Multipart, Query, Request, State},
-    http::{header, HeaderMap, HeaderValue, Method},
+    extract::{Query, Request, State},
+    http::{header, HeaderMap, HeaderValue, Method, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{any, get, post},
+    routing::{any, get, post, put},
     Json, Router,
 };
 use error::{ApiError, ApiResult};
 use serde::Deserialize;
 use narwhal_shared::{
     CreateReq, DeleteReq, Entry, Info, Listing, OpReport, Place, RenameReq, SizeReport,
-    TransferReq,
+    TransferReq, TrashItem, TrashReq,
 };
 use std::{
     net::SocketAddr,
@@ -36,7 +37,15 @@ struct Config {
     root: PathBuf,
     root_name: String,
     read_only: bool,
+    /// Deleting moves items to the Trash.
+    trash: bool,
+    /// Trash items older than this are deleted for good; 0 = never.
+    trash_days: u64,
     places: Vec<Place>,
+    /// Default number of files the app uploads at once.
+    upload_parallel: u32,
+    /// Largest upload in bytes; 0 = unlimited.
+    max_upload: u64,
     /// Host names the server answers to; empty = any.
     allowed_hosts: Vec<String>,
 }
@@ -94,7 +103,11 @@ async fn main() {
         root,
         root_name: env("NARWHAL_ROOT_NAME").unwrap_or_else(|| "Storage".into()),
         read_only: env_bool("NARWHAL_READ_ONLY"),
+        trash: env("NARWHAL_TRASH").is_none() || env_bool("NARWHAL_TRASH"),
+        trash_days: env("NARWHAL_TRASH_DAYS").and_then(|v| v.parse().ok()).unwrap_or(30),
         places: env("NARWHAL_PLACES").map(|p| parse_places(&p)).unwrap_or_default(),
+        max_upload: max_upload_mb * 1024 * 1024,
+        upload_parallel: env("NARWHAL_UPLOAD_PARALLEL").and_then(|v| v.parse().ok()).unwrap_or(3).clamp(1, 16),
         allowed_hosts: env("NARWHAL_ALLOWED_HOSTS")
             .map(|v| {
                 v.split(',')
@@ -119,14 +132,10 @@ async fn main() {
         root = %cfg.root.display(),
         static_dir = %static_dir.display(),
         read_only = cfg.read_only,
+        trash = cfg.trash,
+        trash_days = cfg.trash_days,
         "starting narwhal on {local} ({stack})"
     );
-
-    let body_limit = if max_upload_mb == 0 {
-        DefaultBodyLimit::disable()
-    } else {
-        DefaultBodyLimit::max((max_upload_mb * 1024 * 1024) as usize)
-    };
 
     let api = Router::new()
         .route("/api/info", get(info))
@@ -139,16 +148,35 @@ async fn main() {
         .route("/api/rename", post(rename))
         .route("/api/delete", post(delete))
         .route("/api/transfer", post(transfer))
-        .route("/api/upload", post(upload))
+        .route("/api/trash", get(trash_list).post(trash_move))
+        .route("/api/trash/restore", post(trash_restore))
+        .route("/api/trash/purge", post(trash_purge))
+        .route("/api/trash/empty", post(trash_empty))
+        .route("/api/upload", put(upload))
         .route("/api/{*rest}", any(|| async { ApiError::not_found("Unknown API endpoint") }))
         .route("/healthz", get(|| async { "ok" }))
-        .layer(body_limit)
         .with_state(cfg.clone());
 
     // The SPA: hashed assets from trunk, index.html as fallback.
     let spa = Compression::new(
         ServeDir::new(&static_dir).fallback(ServeFile::new(static_dir.join("index.html"))),
     );
+
+    if cfg.trash && !cfg.read_only && cfg.trash_days > 0 {
+        let c = cfg.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(3600));
+            loop {
+                tick.tick().await;
+                let c = c.clone();
+                if let Ok(rep) = blocking(move || Ok(trash::expire(&c.root, c.trash_days))).await {
+                    if rep.done > 0 || !rep.errors.is_empty() {
+                        tracing::info!(removed = rep.done, errors = ?rep.errors, "emptied old Trash items");
+                    }
+                }
+            }
+        });
+    }
 
     let app = api
         .fallback_service(spa)
@@ -235,7 +263,7 @@ fn host_without_port(host: &str) -> &str {
 ///   rebinding, where a malicious site points its own domain at this server.
 /// - Writes (anything but GET/HEAD/OPTIONS) must come from this app's own
 ///   origin. This stops cross-site request forgery, e.g. a page elsewhere
-///   posting a multipart upload with the user's cookies.
+///   submitting a form to this server with the user's cookies.
 fn check_request(
     method: &Method,
     host: Option<&str>,
@@ -313,6 +341,22 @@ struct DownloadQuery {
 }
 
 #[derive(Deserialize)]
+struct UploadQuery {
+    /// Folder to upload into.
+    #[serde(default = "root_path")]
+    path: String,
+    /// The file's path below that folder (`a.jpg` or `photos/2024/a.jpg`).
+    rel: String,
+    /// Exact size in bytes.
+    size: u64,
+    /// Hex SHA-256 of the content.
+    sha256: String,
+    /// A repeat of an attempt that may have arrived: reuse an identical file.
+    #[serde(default)]
+    retry: bool,
+}
+
+#[derive(Deserialize)]
 struct SearchQuery {
     #[serde(default = "root_path")]
     path: String,
@@ -344,6 +388,9 @@ async fn info(State(cfg): State<AppState>) -> ApiResult<Json<Info>> {
             read_only: c.read_only,
             disk: fsops::disk_info(&c.root),
             places: fsops::places(&c.root, &c.root_name, &c.places),
+            trash: trash_enabled(&c),
+            trash_items: if trash_enabled(&c) { trash::count(&c.root) } else { 0 },
+            upload_parallel: c.upload_parallel,
         })
     })
     .await
@@ -386,6 +433,44 @@ async fn delete(State(cfg): State<AppState>, Json(req): Json<DeleteReq>) -> ApiR
     blocking(move || Ok(fsops::delete(&cfg.root, &req.paths))).await.map(Json)
 }
 
+fn trash_enabled(cfg: &Config) -> bool {
+    cfg.trash && !cfg.read_only
+}
+
+fn ensure_trash(cfg: &Config) -> ApiResult<()> {
+    ensure_writable(cfg)?;
+    if cfg.trash {
+        Ok(())
+    } else {
+        Err(ApiError::forbidden("The Trash is turned off"))
+    }
+}
+
+async fn trash_list(State(cfg): State<AppState>) -> ApiResult<Json<Vec<TrashItem>>> {
+    ensure_trash(&cfg)?;
+    blocking(move || trash::list(&cfg.root)).await.map(Json)
+}
+
+async fn trash_move(State(cfg): State<AppState>, Json(req): Json<DeleteReq>) -> ApiResult<Json<OpReport>> {
+    ensure_trash(&cfg)?;
+    blocking(move || Ok(trash::trash(&cfg.root, &req.paths))).await.map(Json)
+}
+
+async fn trash_restore(State(cfg): State<AppState>, Json(req): Json<TrashReq>) -> ApiResult<Json<OpReport>> {
+    ensure_trash(&cfg)?;
+    blocking(move || Ok(trash::restore(&cfg.root, &req.ids))).await.map(Json)
+}
+
+async fn trash_purge(State(cfg): State<AppState>, Json(req): Json<TrashReq>) -> ApiResult<Json<OpReport>> {
+    ensure_trash(&cfg)?;
+    blocking(move || Ok(trash::purge(&cfg.root, &req.ids))).await.map(Json)
+}
+
+async fn trash_empty(State(cfg): State<AppState>) -> ApiResult<Json<OpReport>> {
+    ensure_trash(&cfg)?;
+    blocking(move || Ok(trash::empty(&cfg.root))).await.map(Json)
+}
+
 async fn transfer(
     State(cfg): State<AppState>,
     Json(req): Json<TransferReq>,
@@ -408,6 +493,9 @@ async fn download(
         return Err(ApiError::bad_request("Only files can be downloaded"));
     }
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    // Decided by name, not by the response: a 304 (cache revalidation) has
+    // no Content-Type, and the browser applies its headers to the cached copy.
+    let is_pdf = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf"));
 
     let res = match ServeFile::new(&path).oneshot(req).await {
         Ok(r) => r,
@@ -425,9 +513,6 @@ async fn download(
         headers.insert(header::CONTENT_DISPOSITION, v);
     }
     headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
-    let is_pdf = headers
-        .get(header::CONTENT_TYPE)
-        .is_some_and(|v| v.as_bytes().starts_with(b"application/pdf"));
     if q.inline && is_pdf {
         // Browsers' PDF viewers refuse to run in a sandboxed document, and
         // run PDF scripts in their own isolated viewer anyway. Allow the app
@@ -452,97 +537,86 @@ impl Drop for TempGuard {
     }
 }
 
+/// How long an upload may go without receiving any data.
+const UPLOAD_STALL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Uploads one file sent as the raw request body, and only puts it in place
+/// if it arrived complete: the size and SHA-256 the client announced must
+/// match what was received. Until then it is a hidden temp file, which is
+/// deleted if anything goes wrong (including the client going away).
+/// Returns the file's virtual path.
 async fn upload(
     State(cfg): State<AppState>,
-    Query(q): Query<PathQuery>,
-    mut multipart: Multipart,
-) -> ApiResult<Json<OpReport>> {
+    Query(q): Query<UploadQuery>,
+    body: Body,
+) -> ApiResult<Json<String>> {
+    use futures_util::StreamExt;
+    use sha2::{Digest, Sha256};
+
     ensure_writable(&cfg)?;
-    let dir = fsops::resolve(&cfg.root, &q.path)?;
-    if !tokio::fs::metadata(&dir).await?.is_dir() {
+    let expected = q.sha256.to_ascii_lowercase();
+    if expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(ApiError::bad_request("Invalid checksum"));
+    }
+    if cfg.max_upload > 0 && q.size > cfg.max_upload {
+        return Err(ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, "The file is larger than the upload limit"));
+    }
+    let base = fsops::resolve(&cfg.root, &q.path)?;
+    if !tokio::fs::metadata(&base).await?.is_dir() {
         return Err(ApiError::bad_request("Upload target is not a folder"));
     }
+    let (subdirs, name) = fsops::split_upload_path(&q.rel)?;
+    let vdir = subdirs.iter().fold(fsops::normalize_virtual(&q.path)?, |acc, d| narwhal_shared::vjoin(&acc, d));
+    let root = cfg.root.clone();
+    let dir = blocking(move || fsops::make_upload_dirs(&root, &base, &subdirs)).await?;
+    let d = dir.clone();
+    let (file, tmp) = blocking(move || fsops::create_temp(&d).map_err(ApiError::from)).await?;
+    let mut guard = TempGuard(Some(tmp.clone()));
 
-    let mut report = OpReport::default();
-    // For folder uploads the client sends a `path` field (e.g. `photos/2024/a.jpg`)
-    // right before each file; it applies to that file only.
-    let mut rel_path: Option<String> = None;
-    while let Some(mut field) = multipart
-        .next_field()
-        .await
-        .map_err(|e| ApiError::bad_request(e.to_string()))?
-    {
-        if field.file_name().is_none() {
-            if field.name() == Some("path") {
-                rel_path = Some(field.text().await.map_err(|e| ApiError::bad_request(e.to_string()))?);
-            }
-            continue;
+    // A damaged or cut-off upload is worth retrying, so it gets 422.
+    let damaged = |m: &str| ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, m);
+    let mut file = tokio::fs::File::from_std(file);
+    let mut hasher = Sha256::new();
+    let mut received = 0u64;
+    let mut stream = body.into_data_stream();
+    loop {
+        let next = tokio::time::timeout(UPLOAD_STALL, stream.next())
+            .await
+            .map_err(|_| ApiError::new(StatusCode::REQUEST_TIMEOUT, "The upload stalled"))?;
+        let Some(chunk) = next else { break };
+        let chunk = chunk.map_err(|_| damaged("The upload was interrupted"))?;
+        received += chunk.len() as u64;
+        if received > q.size {
+            return Err(damaged("More data arrived than announced"));
         }
-        let raw = field.file_name().unwrap_or_default().to_owned();
-        let shown = rel_path.clone().unwrap_or_else(|| raw.clone());
-        let parsed = match rel_path.take() {
-            Some(rel) => fsops::split_upload_path(&rel),
-            None => fsops::sanitize_name(&raw).map(|n| (Vec::new(), n)),
-        };
-        let (subdirs, name) = match parsed {
-            Ok(v) => v,
-            Err(e) => {
-                report.errors.push(format!("{shown}: {}", e.message));
-                continue;
-            }
-        };
-        let dir = if subdirs.is_empty() {
-            dir.clone()
-        } else {
-            let (root, base) = (cfg.root.clone(), dir.clone());
-            match blocking(move || fsops::make_upload_dirs(&root, &base, &subdirs)).await {
-                Ok(d) => d,
-                Err(e) => {
-                    report.errors.push(format!("{shown}: {}", e.message));
-                    continue;
-                }
-            }
-        };
-        // Write to a hidden temp file first so readers never see partial files.
-        let d = dir.clone();
-        let (file, tmp) = match blocking(move || fsops::create_temp(&d).map_err(ApiError::from)).await {
-            Ok(v) => v,
-            Err(e) => {
-                report.errors.push(format!("{shown}: {}", e.message));
-                continue;
-            }
-        };
-        let mut tmp_guard = TempGuard(Some(tmp.clone()));
-        let result = async {
-            write_field(&mut field, tokio::fs::File::from_std(file)).await?;
-            // Never replaces an existing file, even one created meanwhile.
-            let d = dir.clone();
-            let n = name.clone();
-            blocking(move || fsops::rename_unique(&tmp, &d, &n).map_err(ApiError::from)).await
-        }
-        .await;
-        match result {
-            Ok(_) => {
-                tmp_guard.0 = None;
-                report.done += 1;
-            }
-            Err(e) => report.errors.push(format!("{shown}: {}", e.message)),
-        }
-    }
-    Ok(Json(report))
-}
-
-async fn write_field(field: &mut Field<'_>, mut file: tokio::fs::File) -> ApiResult<()> {
-    while let Some(chunk) = field
-        .chunk()
-        .await
-        .map_err(|e| ApiError::bad_request(e.to_string()))?
-    {
+        hasher.update(&chunk);
         file.write_all(&chunk).await?;
+    }
+    if received != q.size {
+        return Err(damaged("The upload was incomplete"));
+    }
+    if fsops::hex(&hasher.finalize()) != expected {
+        return Err(damaged("The checksum does not match: the file was damaged on the way"));
     }
     file.flush().await?;
     file.sync_all().await?;
-    Ok(())
+    drop(file);
+
+    let size = q.size;
+    let final_path = blocking(move || {
+        if q.retry {
+            if let Some(existing) = fsops::find_identical(&dir, &name, size, &expected) {
+                let _ = std::fs::remove_file(&tmp);
+                return Ok(existing);
+            }
+        }
+        // Never replaces an existing file, even one created meanwhile.
+        fsops::rename_unique(&tmp, &dir, &name).map_err(ApiError::from)
+    })
+    .await?;
+    guard.0 = None;
+    let final_name = final_path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    Ok(Json(narwhal_shared::vjoin(&vdir, &final_name)))
 }
 
 #[cfg(test)]

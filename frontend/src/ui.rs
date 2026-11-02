@@ -2,6 +2,7 @@
 //! context menu, dialogs and status bar.
 
 use crate::columns::ColumnsView;
+use crate::trash::{self, TrashView};
 use crate::{
     api, icons,
     state::*,
@@ -28,6 +29,7 @@ pub fn App() -> impl IntoView {
     let start = st.hash_path().unwrap_or_else(|| "/".into());
     st.enter(0, start);
     st.refresh_info();
+    crate::upload::guard_unload(st);
 
     Effect::new(move |_| st.save_prefs());
     Effect::new(move |_| {
@@ -54,14 +56,14 @@ pub fn App() -> impl IntoView {
                 4 => st.go_forward(st.active_index()),
                 _ => {}
             }
-            let in_menu = e
-                .target()
-                .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
-                .and_then(|el| el.closest(".menu, .hamburger").ok().flatten())
-                .is_some();
-            if !in_menu {
+            let target = e.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok());
+            let inside = |sel: &str| target.as_ref().and_then(|el| el.closest(sel).ok().flatten()).is_some();
+            if !inside(".menu, .hamburger") {
                 st.menu.set(None);
                 st.hamburger.set(false);
+            }
+            if !inside(".upanel, .upload") && st.upload_panel.get_untracked() {
+                st.upload_panel.set(false);
             }
         }),
         window_event_listener(ev::dragend, move |_| {
@@ -121,6 +123,8 @@ fn on_key(st: AppState, ev: web_sys::KeyboardEvent) {
         if st.menu.get_untracked().is_some() || st.hamburger.get_untracked() {
             st.menu.set(None);
             st.hamburger.set(false);
+        } else if st.upload_panel.get_untracked() {
+            st.upload_panel.set(false);
         } else if st.dialog.with_untracked(|d| d.is_some()) {
             st.dialog.set(None);
         } else if !in_input {
@@ -132,6 +136,42 @@ fn on_key(st: AppState, ev: web_sys::KeyboardEvent) {
         return;
     }
     st.menu.set(None);
+
+    if st.in_trash(i) {
+        let handled = match (key.as_str(), ctrl, alt) {
+            ("Delete", false, false) => {
+                st.ask_delete(i, true);
+                true
+            }
+            ("a", true, false) => {
+                trash::select_all(st, i);
+                true
+            }
+            ("ArrowDown", false, false) => {
+                trash::move_cursor(st, i, 1, shift);
+                true
+            }
+            ("ArrowUp", false, false) => {
+                trash::move_cursor(st, i, -1, shift);
+                true
+            }
+            ("Home", false, false) => {
+                trash::move_cursor(st, i, i64::MIN / 2, shift);
+                true
+            }
+            ("End", false, false) => {
+                trash::move_cursor(st, i, i64::MAX / 2, shift);
+                true
+            }
+            // Folder-only actions do nothing here.
+            ("F2" | "F7" | "Enter", ..) | ("N" | "i" | "l" | "f" | "x" | "c" | "v", true, _) | ("F6", ..) => true,
+            _ => false,
+        };
+        if handled {
+            ev.prevent_default();
+            return;
+        }
+    }
 
     let view_mode = st.view.get_untracked();
     let column_view =
@@ -161,7 +201,7 @@ fn on_key(st: AppState, ev: web_sys::KeyboardEvent) {
         ("ArrowUp", false, false, true) | ("Backspace", false, false, false) => st.go_up(i),
         ("F5", ..) | ("r", true, false, false) => st.refresh_all(),
         ("F2", ..) => st.start_rename(i),
-        ("Delete", ..) => st.ask_delete(i),
+        ("Delete", ..) => st.ask_delete(i, shift),
         ("a", true, false, false) => st.select_all(i),
         ("c", true, false, false) => st.copy(i, false),
         ("x", true, false, false) => {
@@ -232,8 +272,10 @@ fn Toolbar() -> impl IntoView {
     let pane = move || st.panes[st.active.get()];
     let can_back = move || pane().back.with(|b| !b.is_empty());
     let can_fwd = move || pane().forward.with(|f| !f.is_empty());
-    let at_root = move || pane().path.with(|p| p == "/");
-    let writable = move || st.info.with(|i| i.as_ref().map(|i| !i.read_only).unwrap_or(false));
+    let at_root = move || pane().path.with(|p| p == "/" || p == TRASH);
+    let writable = move || {
+        st.info.with(|i| i.as_ref().map(|i| !i.read_only).unwrap_or(false)) && pane().path.with(|p| p != TRASH)
+    };
 
     let view_btn = move |mode: ViewMode, icon: &'static str, title: &'static str| {
         view! {
@@ -330,6 +372,8 @@ fn HamburgerMenu() -> impl IntoView {
             {mcheck(st, "Show Places Panel", "F9", st.places_open.get_untracked(), move || st.places_open.update(|v| *v = !*v))}
             {mcheck(st, "Split View", "F3", st.split.get_untracked(), move || st.toggle_split())}
             <div class="msep"></div>
+            <ParallelPicker/>
+            <div class="msep"></div>
             {mi(st, "Filter…", "Ctrl+I", icons::FILTER, move || st.panes[i].filter.set(Some(String::new())))}
             {mi(st, "Search…", "Ctrl+F", icons::SEARCH, move || st.open_search(i))}
             {mi(st, "Edit Location", "Ctrl+L", icons::RENAME, move || st.panes[i].editing_location.set(true))}
@@ -349,6 +393,15 @@ fn MessageBar() -> impl IntoView {
                 <div class="msgbar" class:error={kind == MsgKind::Error} role="status">
                     <span class="ic" inner_html=icons::INFO></span>
                     <span class="msgtext">{text}</span>
+                    {move || st.undo.get().map(|ids| view! {
+                        <button class="btn small" on:click=move |_| {
+                            st.message.set(None);
+                            st.undo.set(None);
+                            st.restore(ids.clone());
+                        }>
+                            <span class="ic" inner_html=icons::RESTORE></span>"Undo"
+                        </button>
+                    })}
                     {tool_button(icons::CLOSE, "Dismiss", move || st.message.set(None))}
                 </div>
             }
@@ -400,10 +453,51 @@ fn Places() -> impl IntoView {
                     })
                     .collect_view()
             }}
+            <Show when=move || st.info.with(|i| i.as_ref().is_some_and(|i| i.trash))>
+                <TrashPlace/>
+            </Show>
             <div class="grow"></div>
             <div class="section">"Storage"</div>
             <DiskMeter/>
         </aside>
+    }
+}
+
+#[component]
+fn TrashPlace() -> impl IntoView {
+    let st = use_st();
+    let count = move || st.info.with(|i| i.as_ref().map(|i| i.trash_items).unwrap_or(0));
+    let current = move || st.panes[st.active.get()].path.with(|p| p == TRASH);
+    let is_drop = move || st.drop_target.with(|d| d.as_deref() == Some(TRASH));
+    view! {
+        <button class="place trash" class:current=current class:droptarget=is_drop
+            title="Deleted items — drop items here to delete them"
+            on:click=move |_| st.navigate(st.active_index(), TRASH.into())
+            on:dragover=move |ev: ev::DragEvent| {
+                // Only items from inside the app can be trashed.
+                if st.dragging.with_untracked(|d| d.is_none()) {
+                    return;
+                }
+                ev.prevent_default();
+                if let Some(dt) = ev.data_transfer() {
+                    dt.set_drop_effect("move");
+                }
+                if !is_drop() {
+                    st.drop_target.set(Some(TRASH.into()));
+                }
+            }
+            on:drop=move |ev: ev::DragEvent| {
+                ev.prevent_default();
+                st.drop_target.set(None);
+                if let Some(paths) = st.dragging.get_untracked() {
+                    st.dragging.set(None);
+                    st.move_to_trash(paths);
+                }
+            }>
+            <span class="ic" inner_html=icons::TRASH></span>
+            <span class="label">"Trash"</span>
+            {move || (count() > 0).then(|| view! { <span class="count">{count()}</span> })}
+        </button>
     }
 }
 
@@ -477,6 +571,7 @@ fn PaneView(idx: usize) -> impl IntoView {
     // Search results are a flat list, so they're shown as details instead.
     // A memo, so it only notifies when the answer actually changes.
     let column_view = Memo::new(move |_| st.view.get() == ViewMode::Columns && p.results.with(|r| r.is_none()));
+    let in_trash = Memo::new(move |_| p.path.with(|x| x == TRASH));
 
     let list = move || {
         items
@@ -500,6 +595,7 @@ fn PaneView(idx: usize) -> impl IntoView {
                 on:click=on_bg_click on:contextmenu=on_bg_menu
                 on:dragover=on_dragover on:dragleave=on_dragleave on:drop=on_drop>
                 {move || match st.view.get() {
+                    _ if in_trash.get() => view! { <TrashView idx=idx/> }.into_any(),
                     ViewMode::Columns if column_view.get() => view! { <ColumnsView idx=idx/> }.into_any(),
                     ViewMode::Details | ViewMode::Columns => view! {
                         <DetailsHeader/>
@@ -510,8 +606,8 @@ fn PaneView(idx: usize) -> impl IntoView {
                     }.into_any(),
                 }}
                 {move || {
-                    if column_view.get() {
-                        return None; // Each column shows its own state.
+                    if column_view.get() || in_trash.get() {
+                        return None; // These show their own state.
                     }
                     let empty = items.with(|v| v.is_empty());
                     if let Some(err) = p.error.get() {
@@ -532,7 +628,7 @@ fn PaneView(idx: usize) -> impl IntoView {
                     }
                 }}
             </div>
-            <Show when=move || p.filter.with(|f| f.is_some())>
+            <Show when=move || p.filter.with(|f| f.is_some()) && !in_trash.get()>
                 <FilterBar idx=idx/>
             </Show>
         </section>
@@ -570,9 +666,23 @@ fn LocationBar(idx: usize) -> impl IntoView {
 
     view! {
         <div class="location" title="Click to edit the location (Ctrl+L)"
-            on:click=move |_| p.editing_location.set(true)>
+            on:click=move |_| {
+                if p.path.with_untracked(|x| x != TRASH) {
+                    p.editing_location.set(true)
+                }
+            }>
             {move || {
-                if p.editing_location.get() {
+                if p.path.with(|x| x == TRASH) {
+                    view! {
+                        <nav class="crumbs" aria-label="Location">
+                            <span class="crumb current">
+                                <span class="ic" inner_html=icons::TRASH></span>
+                                <span>"Trash"</span>
+                            </span>
+                        </nav>
+                    }
+                    .into_any()
+                } else if p.editing_location.get() {
                     view! {
                         <input class="loc-input" node_ref=input spellcheck="false" prop:value=move || p.path.get()
                             on:click=|ev: ev::MouseEvent| ev.stop_propagation()
@@ -929,7 +1039,7 @@ pub fn RenameBox(idx: usize, path: String, name: String) -> impl IntoView {
 // Context menu
 // ===========================================================================
 
-fn mi(st: AppState, label: &'static str, keys: &'static str, icon: &'static str, f: impl Fn() + 'static) -> impl IntoView {
+pub(crate) fn mi(st: AppState, label: &'static str, keys: &'static str, icon: &'static str, f: impl Fn() + 'static) -> impl IntoView {
     view! {
         <button class="mi" role="menuitem"
             on:click=move |ev: ev::MouseEvent| {
@@ -960,6 +1070,7 @@ fn ContextMenu() -> impl IntoView {
             let x = m.x.min(w - 250).max(4);
             let y = m.y.min(h - 420).max(4);
             let body = match m.target {
+                _ if st.in_trash(m.pane) => trash::trash_menu(st, m.pane),
                 Some(e) => item_menu(st, m.pane, e, ro),
                 None => background_menu(st, m.pane, ro),
             };
@@ -995,7 +1106,11 @@ fn item_menu(st: AppState, i: usize, e: Entry, ro: bool) -> AnyView {
         {(!ro && has_clip && is_dir).then(|| mi(st, "Paste Into Folder", "", icons::PASTE, move || st.paste(i, Some(p_paste.clone()))))}
         <div class="msep"></div>
         {(!ro && n == 1).then(|| mi(st, "Rename…", "F2", icons::RENAME, move || st.start_rename(i)))}
-        {(!ro).then(|| mi(st, "Delete", "Del", icons::TRASH, move || st.ask_delete(i)))}
+        {(!ro && st.trash_enabled()).then(|| mi(st, "Move to Trash", "Del", icons::TRASH, move || st.ask_delete(i, false)))}
+        {(!ro).then(|| {
+            let keys = if st.trash_enabled() { "Shift+Del" } else { "Del" };
+            mi(st, "Delete Permanently", keys, icons::CLOSE, move || st.ask_delete(i, true))
+        })}
     };
     let more = view! {
         <div class="msep"></div>
@@ -1068,7 +1183,36 @@ fn DialogHost() -> impl IntoView {
                     <NameDialog i=i folder=false title="Create New Text File" label="File name" initial="New Text File.txt"/>
                 }
                 .into_any(),
-                Dialog::ConfirmDelete(paths) => view! { <DeleteDialog paths=paths/> }.into_any(),
+                Dialog::ConfirmDelete(paths) => {
+                    let what = match paths.as_slice() {
+                        [one] => format!("“{}”", vname(one)),
+                        many => format!("these {} items", many.len()),
+                    };
+                    let text = format!("Do you really want to permanently delete {what}?");
+                    view! { <DeleteDialog text=text on_ok=move || st.delete(paths.clone())/> }.into_any()
+                }
+                Dialog::ConfirmPurge(ids) => {
+                    let names: Vec<String> = st.trash.with_untracked(|t| {
+                        t.as_ref()
+                            .and_then(|r| r.as_ref().ok())
+                            .map(|v| v.iter().filter(|x| ids.contains(&x.id)).map(|x| x.entry.name.clone()).collect())
+                            .unwrap_or_default()
+                    });
+                    let what = match names.as_slice() {
+                        [one] => format!("“{one}”"),
+                        _ => format!("these {} items", ids.len()),
+                    };
+                    let text = format!("Do you really want to permanently delete {what} from the Trash?");
+                    view! { <DeleteDialog text=text on_ok=move || st.purge(ids.clone())/> }.into_any()
+                }
+                Dialog::ConfirmEmptyTrash => {
+                    let n = st.info.with_untracked(|i| i.as_ref().map(|i| i.trash_items).unwrap_or(0));
+                    let text = format!(
+                        "Do you really want to empty the Trash? {} will be deleted permanently.",
+                        if n == 1 { "1 item".to_string() } else { format!("All {n} items") }
+                    );
+                    view! { <DeleteDialog text=text on_ok=move || st.empty_trash()/> }.into_any()
+                }
                 Dialog::Properties(entry) => view! { <PropertiesDialog entry=entry/> }.into_any(),
                 Dialog::Shortcuts => view! { <ShortcutsDialog/> }.into_any(),
             };
@@ -1141,13 +1285,8 @@ fn NameDialog(
 }
 
 #[component]
-fn DeleteDialog(paths: Vec<String>) -> impl IntoView {
+fn DeleteDialog(text: String, on_ok: impl Fn() + 'static) -> impl IntoView {
     let st = use_st();
-    let what = match paths.as_slice() {
-        [one] => format!("“{}”", vname(one)),
-        many => format!("these {} items", many.len()),
-    };
-    let paths = StoredValue::new(paths);
     let confirm = NodeRef::<html::Button>::new();
     Effect::new(move |_| {
         if let Some(b) = confirm.get() {
@@ -1157,13 +1296,13 @@ fn DeleteDialog(paths: Vec<String>) -> impl IntoView {
     view! {
         <div class="dialog" role="alertdialog" aria-label="Delete permanently">
             <h2>"Delete Permanently"</h2>
-            <p>{format!("Do you really want to permanently delete {what}?")}</p>
+            <p>{text}</p>
             <p class="muted">"This action cannot be undone."</p>
             <div class="buttons">
                 <button class="btn danger" node_ref=confirm
                     on:click=move |_| {
                         st.dialog.set(None);
-                        st.delete(paths.get_value());
+                        on_ok();
                     }>
                     <span class="ic" inner_html=icons::TRASH></span>"Delete"
                 </button>
@@ -1229,7 +1368,8 @@ fn ShortcutsDialog() -> impl IntoView {
         ("Ctrl+A", "Select all"),
         ("Ctrl+C / Ctrl+X / Ctrl+V", "Copy / cut / paste"),
         ("F2", "Rename"),
-        ("Delete", "Delete"),
+        ("Delete", "Move to the Trash"),
+        ("Shift+Delete", "Delete permanently"),
         ("F7", "New folder"),
         ("F3 / Tab", "Split view / switch pane"),
         ("Ctrl+1 / 2 / 3 / 4", "Icons / compact / details / columns"),
@@ -1265,6 +1405,9 @@ fn StatusBar() -> impl IntoView {
     let summary = Memo::new(move |_| {
         let i = st.active.get();
         let p = st.panes[i];
+        if p.path.with(|x| x == TRASH) {
+            return trash::summary(st, i);
+        }
         let vis = st.visible(i);
         let sel: Vec<Entry> = p.selected.with(|s| vis.iter().filter(|e| s.contains(&e.path)).cloned().collect());
         match sel.as_slice() {
@@ -1290,14 +1433,30 @@ fn StatusBar() -> impl IntoView {
         <footer class="statusbar">
             <div class="status-text">
                 {move || match st.upload.get() {
-                    Some(u) => view! {
-                        <span class="upload">
-                            <span>{format!("Uploading {}…", u.label)}</span>
-                            <progress max="1" value=u.progress.to_string()></progress>
-                            <span>{format!("{:.0}%", u.progress * 100.0)}</span>
-                        </span>
+                    Some(u) => {
+                        let pct = u.progress();
+                        let speed = u.speed.map(|s| format!(" · {}", util::format_speed(s))).unwrap_or_default();
+                        let (_, failed, retrying) = crate::upload::counts(&u);
+                        let trouble = match (retrying, failed) {
+                            (0, 0) => String::new(),
+                            (r, 0) => format!(" · {r} retrying"),
+                            (0, f) => format!(" · {f} failed"),
+                            (r, f) => format!(" · {r} retrying, {f} failed"),
+                        };
+                        view! {
+                            <button class="upload" class:on=move || st.upload_panel.get()
+                                title="Show which files are being uploaded"
+                                aria-expanded=move || if st.upload_panel.get() { "true" } else { "false" }
+                                on:click=move |_| st.upload_panel.update(|v| *v = !*v)>
+                                <span class="ulabel">{format!("Uploading {}…", u.label())}</span>
+                                <progress max="1" value=pct.to_string()></progress>
+                                <span class="unum">{format!("{:.0}%{speed}", pct * 100.0)}</span>
+                                {(!trouble.is_empty()).then(|| view! { <span class="uwarn">{trouble}</span> })}
+                                <span class="ic uchev" inner_html=icons::CHEVRON></span>
+                            </button>
+                        }
+                        .into_any()
                     }
-                    .into_any(),
                     None => view! { <span>{move || summary.get()}</span> }.into_any(),
                 }}
             </div>
@@ -1313,6 +1472,164 @@ fn StatusBar() -> impl IntoView {
                 </label>
             </Show>
             <DiskMeter compact=true/>
+            <Show when=move || st.upload_panel.get() && st.upload.with(|u| u.is_some())>
+                <UploadPanel/>
+            </Show>
         </footer>
+    }
+}
+
+/// Choose how many files are uploaded at once (remembered per browser).
+#[component]
+fn ParallelPicker() -> impl IntoView {
+    let st = use_st();
+    let options = [1u32, 2, 3, 4, 6, 8, 12, 16];
+    view! {
+        <label class="parallel" title="How many files are uploaded at the same time"
+            on:click=|ev: ev::MouseEvent| ev.stop_propagation()>
+            <span class="ic" inner_html=icons::UPLOAD></span>
+            <span class="plabel">"Parallel uploads"</span>
+            <select
+                on:change=move |ev: ev::Event| {
+                    let v = event_target_value(&ev);
+                    st.parallel.set(if v == "default" { None } else { v.parse().ok() });
+                }>
+                <option value="default" selected=move || st.parallel.get().is_none()>
+                    {move || format!("Default ({})", st.default_parallel())}
+                </option>
+                {options
+                    .into_iter()
+                    .map(|n| view! {
+                        <option value=n.to_string() selected=move || st.parallel.get() == Some(n)>{n.to_string()}</option>
+                    })
+                    .collect_view()}
+            </select>
+        </label>
+    }
+}
+
+/// Most files listed in the upload panel; the rest are summed up.
+const UPLOAD_ROWS_MAX: usize = 2000;
+
+/// Details of the running upload: overall numbers and every file's state.
+#[component]
+fn UploadPanel() -> impl IntoView {
+    use crate::upload::{counts, FileState};
+    let st = use_st();
+    // Grows when files are added to the running upload.
+    let count = Memo::new(move |_| st.upload.with(|u| u.as_ref().map(|u| u.files.len()).unwrap_or(0)));
+    let dest = Memo::new(move |_| st.upload.with(|u| u.as_ref().and_then(|u| u.dest().map(str::to_string))));
+
+    let stats = move || {
+        st.upload.with(|u| {
+            let Some(u) = u.as_ref() else { return String::new() };
+            let (done, failed, retrying) = counts(u);
+            let mut parts = vec![
+                format!("{done} of {} files", count.get()),
+                format!("{} of {}", format_size(u.sent as u64), format_size(u.total as u64)),
+            ];
+            if let Some(s) = u.speed {
+                parts.push(util::format_speed(s));
+            }
+            if let Some(eta) = u.eta() {
+                parts.push(format!("{} left", util::format_eta(eta)));
+            }
+            if retrying > 0 {
+                parts.push(format!("{retrying} retrying"));
+            }
+            if failed > 0 {
+                parts.push(format!("{failed} failed"));
+            }
+            parts.join(" · ")
+        })
+    };
+    let pct = move || st.upload.with(|u| u.as_ref().map(|u| u.progress()).unwrap_or(0.0));
+
+    // Keep the files being worked on in view (the first one, as several go at once).
+    let first_busy = Memo::new(move |_| {
+        st.upload.with(|u| {
+            u.as_ref().and_then(|u| {
+                u.states.iter().position(|s| !matches!(s, FileState::Waiting | FileState::Done | FileState::Failed(_)))
+            })
+        })
+    });
+    let list = NodeRef::<html::Ul>::new();
+    Effect::new(move |_| {
+        first_busy.track();
+        if let Some(el) = list.get_untracked() {
+            request_animation_frame(move || {
+                if let Ok(Some(row)) = el.query_selector(".urow.now") {
+                    let opts = web_sys::ScrollIntoViewOptions::new();
+                    opts.set_block(web_sys::ScrollLogicalPosition::Nearest);
+                    row.scroll_into_view_with_scroll_into_view_options(&opts);
+                }
+            });
+        }
+    });
+
+    let hidden = move || count.get().saturating_sub(UPLOAD_ROWS_MAX);
+    let row = move |n: usize| {
+        let Some(file) = st.upload.with_untracked(|u| u.as_ref().and_then(|u| u.files.get(n).cloned())) else {
+            return ().into_any();
+        };
+        let size = file.size;
+        let full = narwhal_shared::vjoin(&file.dest, &file.rel);
+        // With several destinations, show where each file goes.
+        let shown = if dest.get_untracked().is_some() { file.rel.clone() } else { full.clone() };
+        let state = Memo::new(move |_| st.upload.with(|u| u.as_ref().and_then(|u| u.states.get(n).cloned())));
+        let busy = move || matches!(state.get(), Some(FileState::Checking | FileState::Sending | FileState::Retrying(..)));
+        let icon = move || match state.get() {
+            Some(FileState::Done) => icons::CHECK,
+            Some(FileState::Failed(_)) => icons::CLOSE,
+            Some(FileState::Retrying(..)) => icons::REFRESH,
+            Some(FileState::Checking | FileState::Sending) => icons::UPLOAD,
+            _ => icons::EMPTY,
+        };
+        let detail = move || match state.get() {
+            Some(FileState::Checking) => "Checking…".to_string(),
+            Some(FileState::Sending) if size > 0.0 => {
+                let done = st.upload.with(|u| u.as_ref().map(|u| u.loaded(n)).unwrap_or(0.0));
+                format!("{:.0}% of {}", done / size * 100.0, format_size(size as u64))
+            }
+            Some(FileState::Retrying(attempt, _)) => format!("Retrying (attempt {attempt})…"),
+            Some(FileState::Failed(_)) => "Failed".to_string(),
+            _ => format_size(size as u64),
+        };
+        let why = move || match state.get() {
+            Some(FileState::Retrying(_, why) | FileState::Failed(why)) => Some(why),
+            _ => None,
+        };
+        view! {
+            <li class="urow" class:done=move || state.get() == Some(FileState::Done) class:now=busy
+                class:failed=move || matches!(state.get(), Some(FileState::Failed(_)))>
+                <span class="ic ustate" inner_html=icon></span>
+                <span class="uname" title=full>
+                    {shown}
+                    {move || why().map(|w| view! { <span class="uwhy">{w}</span> })}
+                </span>
+                <span class="usize">{detail}</span>
+            </li>
+        }
+        .into_any()
+    };
+
+    view! {
+        <div class="upanel" role="dialog" aria-label="Upload details">
+            <div class="uhead">
+                <div class="utitle">
+                    {move || format!("Uploading {}", util::plural(count.get(), "file", "files"))}
+                    {move || dest.get().map(|d| view! { " to " <span class="mono">{d}</span> })}
+                </div>
+                {tool_button(icons::CLOSE, "Close", move || st.upload_panel.set(false))}
+            </div>
+            <progress max="1" value=move || pct().to_string()></progress>
+            <div class="ustats">{stats}</div>
+            <ParallelPicker/>
+            <div class="unote">"Every file is checked against its checksum on the server; damaged or interrupted files are sent again. Files you add now join this upload."</div>
+            <ul class="ulist" node_ref=list>
+                <For each=move || 0..count.get().min(UPLOAD_ROWS_MAX) key=|n| *n children=row/>
+                {move || (hidden() > 0).then(|| view! { <li class="urow more">{format!("…and {} more", hidden())}</li> })}
+            </ul>
+        </div>
     }
 }

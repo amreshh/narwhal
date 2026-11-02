@@ -2,7 +2,9 @@ mod api;
 mod columns;
 mod icons;
 mod state;
+mod trash;
 mod ui;
+mod upload;
 mod util;
 
 fn main() {

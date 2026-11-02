@@ -20,6 +20,22 @@ pub fn format_size(bytes: u64) -> String {
     }
 }
 
+/// "3.2 MiB/s".
+pub fn format_speed(bytes_per_sec: f64) -> String {
+    format!("{}/s", format_size(bytes_per_sec.max(0.0) as u64))
+}
+
+/// Rough time left: "a few seconds", "40 s", "3 min", "1 h 5 min".
+pub fn format_eta(secs: f64) -> String {
+    let s = secs.round() as u64;
+    match s {
+        0..=4 => "a few seconds".into(),
+        5..=59 => format!("{s} s"),
+        60..=3599 => format!("{} min", (s + 30) / 60),
+        _ => format!("{} h {} min", s / 3600, (s % 3600) / 60),
+    }
+}
+
 pub fn format_items(n: u32) -> String {
     if n == 1 {
         "1 item".into()
