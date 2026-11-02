@@ -77,6 +77,9 @@ jobs:
           rustup toolchain install stable --profile minimal --component clippy
           rustup target add wasm32-unknown-unknown
 
+      # Caches ~/.cargo and target/ between runs, keyed on Cargo.lock and the toolchain.
+      - uses: Swatinem/rust-cache@v2
+
       - name: Tests
         run: cargo test --locked -p narwhal-server -p narwhal-shared -p narwhal-office
 
