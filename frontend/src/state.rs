@@ -156,13 +156,27 @@ impl Upload {
         self.speed.filter(|s| *s > 0.0).map(|s| (self.total - self.sent).max(0.0) / s)
     }
 
+    /// Cancelled is final: a request that is still winding down can't
+    /// change it back.
     pub fn set_state(&mut self, n: usize, state: FileState) {
-        if let Some(s) = self.states.get_mut(n) {
+        if let Some(s) = self.states.get_mut(n).filter(|s| **s != FileState::Cancelled) {
             *s = state;
         }
     }
 
+    /// Stop file `n` if it hasn't finished. Its bytes no longer count
+    /// towards the progress.
+    pub fn cancel(&mut self, n: usize) {
+        let Some(state) = self.states.get_mut(n).filter(|s| s.is_pending()) else { return };
+        *state = FileState::Cancelled;
+        self.total = (self.total - self.files[n].size).max(0.0);
+        self.sent = (self.sent - std::mem::take(&mut self.loaded[n])).max(0.0);
+    }
+
     pub fn set_loaded(&mut self, n: usize, bytes: f64) {
+        if self.states.get(n) == Some(&FileState::Cancelled) {
+            return;
+        }
         let Some(l) = self.loaded.get_mut(n) else { return };
         let bytes = bytes.clamp(0.0, self.files[n].size);
         self.sent = (self.sent + bytes - *l).max(0.0);
@@ -658,7 +672,8 @@ impl AppState {
         if e.is_dir() {
             self.navigate(i, e.path.clone());
         } else {
-            let _ = window().open_with_url_and_target(&api::download_url(&e.path, true), "_blank");
+            // noopener: the opened file gets no handle on this page.
+            let _ = window().open_with_url_and_target_and_features(&api::download_url(&e.path, true), "_blank", "noopener");
         }
     }
 
@@ -1175,11 +1190,16 @@ impl AppState {
         self.upload.set(Some(Upload::new(list)));
         let st = *self;
         spawn_local(async move {
-            let rep = crate::upload::run(st).await;
+            let crate::upload::Outcome { report, cancelled } = crate::upload::run(st).await;
             st.upload.set(None);
             st.upload_panel.set(false);
-            let msg = format!("Uploaded {}", util::plural(rep.done as usize, "file", "files"));
-            st.report(&rep, Some(msg));
+            let done = report.done as usize;
+            let msg = match (done, cancelled) {
+                (0, 1..) => "Upload cancelled".to_string(),
+                (_, 0) => format!("Uploaded {}", util::plural(done, "file", "files")),
+                _ => format!("Uploaded {} · {cancelled} cancelled", util::plural(done, "file", "files")),
+            };
+            st.report(&report, Some(msg));
             st.refresh_all();
         });
     }

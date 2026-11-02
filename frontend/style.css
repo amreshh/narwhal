@@ -501,7 +501,10 @@ kbd { font-family: var(--mono); font-size: 12px; }
 .upanel > progress { width: calc(100% - 6px); height: 8px; accent-color: var(--accent); }
 .ustats { color: var(--muted); font-variant-numeric: tabular-nums; }
 .ulist { list-style: none; margin: 4px 0 0; padding: 0 6px 0 0; overflow-y: auto; min-height: 0; border-top: 1px solid var(--border-soft); }
-.urow { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 3px 2px; color: var(--muted); }
+.urow { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto 22px; align-items: center; gap: 8px; padding: 3px 2px; color: var(--muted); }
+.urow .ucancel { display: flex; justify-content: center; }
+.urow .ucancel .tb { width: 22px; height: 20px; min-width: 0; padding: 0; }
+.urow.cancelled .uname { text-decoration: line-through; }
 .urow .uname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .urow .usize { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .urow.done { color: var(--text); }

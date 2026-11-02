@@ -1,6 +1,7 @@
 //! Thin client for the Narwhal HTTP API. URLs are relative so the app works
 //! behind any ingress path prefix.
 
+use crate::upload::Cancel;
 use gloo_net::http::{Request, Response};
 use serde::{de::DeserializeOwned, Serialize};
 use narwhal_shared::{
@@ -132,6 +133,8 @@ pub enum SendError {
     Retry { msg: String, damaged: bool },
     /// Trying again won't help (e.g. read-only storage, invalid name).
     Fatal(String),
+    /// The user cancelled it.
+    Cancelled,
 }
 
 /// How long an upload may go without progress before it is given up on.
@@ -139,15 +142,20 @@ const STALL_MS: f64 = 60_000.0;
 
 /// Upload one file to `dir` (as `rel`, which may include folders) with its
 /// SHA-256; the server keeps it only if it arrives intact. Uses XHR for
-/// upload progress (fetch has none). `on_progress` gets the bytes sent.
+/// upload progress (fetch has none). `on_progress` gets the bytes sent;
+/// `cancel` aborts the request.
 pub async fn upload_file(
     dir: &str,
     rel: &str,
     file: &web_sys::File,
     sha256: &str,
     retry: bool,
+    cancel: &Cancel,
     on_progress: impl Fn(f64) + 'static,
 ) -> Result<String, SendError> {
+    if cancel.is_cancelled() {
+        return Err(SendError::Cancelled);
+    }
     let fatal = |e: JsValue| SendError::Fatal(js_err(e));
     let url = format!(
         "api/upload?path={}&rel={}&size={}&sha256={sha256}{}",
@@ -199,15 +207,23 @@ pub async fn upload_file(
         xhr.set_onerror(Some(&reject));
         xhr.set_onabort(Some(&reject));
     });
+    cancel.set_request(Some(xhr.clone()));
     let outcome = match xhr.send_with_opt_blob(Some(file)) {
         Ok(()) => wasm_bindgen_futures::JsFuture::from(finished).await.map(|_| ()),
         Err(e) => Err(e),
     };
+    cancel.set_request(None);
     if let Some(w) = watchdog {
         w.clear();
     }
+    // Unhook the closures before they are freed, so no late event calls them.
+    up.set_onprogress(None);
+    up.set_onload(None);
     drop((progress, sent));
     if outcome.is_err() {
+        if cancel.is_cancelled() {
+            return Err(SendError::Cancelled);
+        }
         let msg = if stalled.get() { "The connection stalled" } else { "The connection was interrupted" };
         return Err(SendError::Retry { msg: msg.into(), damaged: false });
     }

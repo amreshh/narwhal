@@ -190,8 +190,9 @@ fn on_key(st: AppState, ev: web_sys::KeyboardEvent) {
     }
 
     let view_mode = st.view.get_untracked();
-    let column_view =
-        view_mode == ViewMode::Columns && st.panes[i].results.with_untracked(|r| r.is_none());
+    let column_view = view_mode == ViewMode::Columns
+        && st.panes[i].results.with_untracked(|r| r.is_none())
+        && !st.in_trash(i);
     if column_view && !ctrl && !alt && !shift {
         let moved = match key.as_str() {
             "ArrowRight" => {
@@ -584,10 +585,13 @@ fn PaneView(idx: usize) -> impl IntoView {
     };
     let key2 = pane_key.clone();
     let is_drop = move || st.drop_target.with(|d| d.as_deref() == Some(key2.as_str()));
-    // Search results are a flat list, so they're shown as details instead.
-    // A memo, so it only notifies when the answer actually changes.
-    let column_view = Memo::new(move |_| st.view.get() == ViewMode::Columns && p.results.with(|r| r.is_none()));
     let in_trash = Memo::new(move |_| p.path.with(|x| x == TRASH));
+    // Search results are a flat list, so they're shown as details instead;
+    // the Trash has a list layout of its own. A memo, so it only notifies
+    // when the answer actually changes.
+    let column_view = Memo::new(move |_| {
+        st.view.get() == ViewMode::Columns && p.results.with(|r| r.is_none()) && !in_trash.get()
+    });
 
     let list = move || {
         items
@@ -1453,7 +1457,7 @@ fn StatusBar() -> impl IntoView {
                     Some(u) => {
                         let pct = u.progress();
                         let speed = u.speed.map(|s| format!(" · {}", util::format_speed(s))).unwrap_or_default();
-                        let (_, failed, retrying) = crate::upload::counts(&u);
+                        let crate::upload::Counts { failed, retrying, .. } = crate::upload::counts(&u);
                         let trouble = match (retrying, failed) {
                             (0, 0) => String::new(),
                             (r, 0) => format!(" · {r} retrying"),
@@ -1531,7 +1535,7 @@ const UPLOAD_ROWS_MAX: usize = 2000;
 /// Details of the running upload: overall numbers and every file's state.
 #[component]
 fn UploadPanel() -> impl IntoView {
-    use crate::upload::{counts, FileState};
+    use crate::upload::{counts, Counts, FileState};
     let st = use_st();
     // Grows when files are added to the running upload.
     let count = Memo::new(move |_| st.upload.with(|u| u.as_ref().map(|u| u.files.len()).unwrap_or(0)));
@@ -1540,7 +1544,7 @@ fn UploadPanel() -> impl IntoView {
     let stats = move || {
         st.upload.with(|u| {
             let Some(u) = u.as_ref() else { return String::new() };
-            let (done, failed, retrying) = counts(u);
+            let Counts { done, failed, retrying, cancelled } = counts(u);
             let mut parts = vec![
                 format!("{done} of {} files", count.get()),
                 format!("{} of {}", format_size(u.sent as u64), format_size(u.total as u64)),
@@ -1557,18 +1561,18 @@ fn UploadPanel() -> impl IntoView {
             if failed > 0 {
                 parts.push(format!("{failed} failed"));
             }
+            if cancelled > 0 {
+                parts.push(format!("{cancelled} cancelled"));
+            }
             parts.join(" · ")
         })
     };
     let pct = move || st.upload.with(|u| u.as_ref().map(|u| u.progress()).unwrap_or(0.0));
+    let any_pending = move || st.upload.with(|u| u.as_ref().is_some_and(|u| u.states.iter().any(FileState::is_pending)));
 
     // Keep the files being worked on in view (the first one, as several go at once).
     let first_busy = Memo::new(move |_| {
-        st.upload.with(|u| {
-            u.as_ref().and_then(|u| {
-                u.states.iter().position(|s| !matches!(s, FileState::Waiting | FileState::Done | FileState::Failed(_)))
-            })
-        })
+        st.upload.with(|u| u.as_ref().and_then(|u| u.states.iter().position(FileState::is_busy)))
     });
     let list = NodeRef::<html::Ul>::new();
     Effect::new(move |_| {
@@ -1594,10 +1598,11 @@ fn UploadPanel() -> impl IntoView {
         // With several destinations, show where each file goes.
         let shown = if dest.get_untracked().is_some() { file.rel.clone() } else { full.clone() };
         let state = Memo::new(move |_| st.upload.with(|u| u.as_ref().and_then(|u| u.states.get(n).cloned())));
-        let busy = move || matches!(state.get(), Some(FileState::Checking | FileState::Sending | FileState::Retrying(..)));
+        let busy = move || state.get().is_some_and(|s| s.is_busy());
+        let pending = move || state.get().is_some_and(|s| s.is_pending());
         let icon = move || match state.get() {
             Some(FileState::Done) => icons::CHECK,
-            Some(FileState::Failed(_)) => icons::CLOSE,
+            Some(FileState::Failed(_) | FileState::Cancelled) => icons::CLOSE,
             Some(FileState::Retrying(..)) => icons::REFRESH,
             Some(FileState::Checking | FileState::Sending) => icons::UPLOAD,
             _ => icons::EMPTY,
@@ -1610,21 +1615,32 @@ fn UploadPanel() -> impl IntoView {
             }
             Some(FileState::Retrying(attempt, _)) => format!("Retrying (attempt {attempt})…"),
             Some(FileState::Failed(_)) => "Failed".to_string(),
+            Some(FileState::Cancelled) => "Cancelled".to_string(),
             _ => format_size(size as u64),
         };
         let why = move || match state.get() {
             Some(FileState::Retrying(_, why) | FileState::Failed(why)) => Some(why),
             _ => None,
         };
+        let cancel_title = format!("Cancel uploading “{}”", vname(&file.rel));
         view! {
             <li class="urow" class:done=move || state.get() == Some(FileState::Done) class:now=busy
-                class:failed=move || matches!(state.get(), Some(FileState::Failed(_)))>
+                class:failed=move || matches!(state.get(), Some(FileState::Failed(_)))
+                class:cancelled=move || state.get() == Some(FileState::Cancelled)>
                 <span class="ic ustate" inner_html=icon></span>
                 <span class="uname" title=full>
                     {shown}
                     {move || why().map(|w| view! { <span class="uwhy">{w}</span> })}
                 </span>
                 <span class="usize">{detail}</span>
+                <span class="ucancel">
+                    {move || pending().then(|| view! {
+                        <button class="tb" title=cancel_title.clone() aria-label=cancel_title.clone()
+                            on:click=move |_| crate::upload::cancel(st, n)>
+                            <span class="ic" inner_html=icons::CLOSE></span>
+                        </button>
+                    })}
+                </span>
             </li>
         }
         .into_any()
@@ -1637,6 +1653,10 @@ fn UploadPanel() -> impl IntoView {
                     {move || format!("Uploading {}", util::plural(count.get(), "file", "files"))}
                     {move || dest.get().map(|d| view! { " to " <span class="mono">{d}</span> })}
                 </div>
+                <Show when=any_pending>
+                    <button class="btn small" title="Stop every file that hasn't finished uploading"
+                        on:click=move |_| crate::upload::cancel_all(st)>"Cancel All"</button>
+                </Show>
                 {tool_button(icons::CLOSE, "Close", move || st.upload_panel.set(false))}
             </div>
             <progress max="1" value=move || pct().to_string()></progress>
