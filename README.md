@@ -65,12 +65,13 @@ copy/move/rename/delete, search, naming).
 ```sh
 docker build -t ghcr.io/amreshh/narwhal:latest .
 
-# Docker: run as your own user so the mounted folder is writable
-docker run --rm -p 8080:8080 --user "$(id -u):$(id -g)" \
+# Docker: run as your own user so the mounted folder is writable.
+# 127.0.0.1 keeps it off your network: there is no login.
+docker run --rm -p 127.0.0.1:8080:8080 --user "$(id -u):$(id -g)" \
   -v "$HOME/Downloads:/data" ghcr.io/amreshh/narwhal:latest
 
 # Rootless Podman: map your user to the image's UID 65532 instead
-podman run --rm -p 8080:8080 --userns=keep-id:uid=65532,gid=65532 \
+podman run --rm -p 127.0.0.1:8080:8080 --userns=keep-id:uid=65532,gid=65532 \
   -v "$HOME/Downloads:/data" ghcr.io/amreshh/narwhal:latest
 ```
 
@@ -107,6 +108,7 @@ With a ReadWriteOnce volume keep `replicas: 1` (strategy `Recreate`).
 | `NARWHAL_PLACES` | *(empty)* | Fixed sidebar entries: `Docs=/documents,Media=/media`. Empty = top-level folders. |
 | `NARWHAL_MAX_UPLOAD_MB` | `0` | Request body limit for uploads; `0` = unlimited. |
 | `NARWHAL_STATIC_DIR` | `./static` | Built frontend (`/app/static` in the image). |
+| `NARWHAL_ALLOWED_HOSTS` | *(empty)* | Comma-separated host names the server answers to, e.g. `files.example.com,localhost`. Other hosts get 403 (blocks DNS rebinding). Empty = any. `/healthz` is always allowed. |
 | `NARWHAL_BIND` | `[::]:8080` | Listen address. The default accepts IPv4 and IPv6 (falls back to IPv4 if IPv6 is disabled); `0.0.0.0:8080` forces IPv4 only. |
 | `RUST_LOG` | `info,tower_http=info` | Log filter. |
 
@@ -115,12 +117,17 @@ With a ReadWriteOnce volume keep `replicas: 1` (strategy `Recreate`).
 - **There is no built-in login.** Anyone who can reach the Service can read and
   modify the volume. Put it behind your ingress's authentication — the ingress
   manifest has commented annotations for oauth2-proxy — or set `NARWHAL_READ_ONLY=true`.
+- Write requests from other sites are refused (checked with the browser's
+  `Sec-Fetch-Site` / `Origin` headers), so a malicious page cannot upload or
+  delete with your login. Set `NARWHAL_ALLOWED_HOSTS` to your hostname to also
+  refuse DNS-rebinding requests. Pages are sent with `X-Frame-Options: DENY`.
 - All paths are resolved against the root; `..` is rejected and symlinks that
   point outside the root are refused.
 - Files opened "in a new tab" are served with `Content-Security-Policy: sandbox`
   and `nosniff`, so an uploaded HTML or SVG file cannot run scripts against the app.
 - Uploads are written to a hidden temp file and renamed into place; name clashes
-  get ` (1)`, ` (2)`… suffixes rather than overwriting.
+  get ` (1)`, ` (2)`… suffixes rather than overwriting. Uploads, copies, moves and
+  renames never replace an existing file.
 
 ## API
 

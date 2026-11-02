@@ -10,8 +10,9 @@ use narwhal_shared::{
 };
 use std::fs;
 use std::io;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::UNIX_EPOCH;
 
 /// Hard cap on entries visited by a recursive search or size walk.
@@ -98,6 +99,66 @@ pub fn unique_path(dir: &Path, name: &str) -> PathBuf {
         .map(|n| dir.join(format!("{stem} ({n}){ext}")))
         .find(|p| fs::symlink_metadata(p).is_err())
         .expect("infinite iterator")
+}
+
+/// Rename `src` to `dst`, failing with `AlreadyExists` instead of replacing
+/// an existing `dst`. Atomic where the filesystem supports `RENAME_NOREPLACE`.
+pub fn rename_noreplace(src: &Path, dst: &Path) -> io::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+        let s = CString::new(src.as_os_str().as_bytes()).map_err(|_| io::ErrorKind::InvalidInput)?;
+        let d = CString::new(dst.as_os_str().as_bytes()).map_err(|_| io::ErrorKind::InvalidInput)?;
+        // SAFETY: both arguments are valid NUL-terminated paths.
+        let rc = unsafe {
+            libc::renameat2(libc::AT_FDCWD, s.as_ptr(), libc::AT_FDCWD, d.as_ptr(), libc::RENAME_NOREPLACE)
+        };
+        if rc == 0 {
+            return Ok(());
+        }
+        let err = io::Error::last_os_error();
+        // Filesystems without RENAME_NOREPLACE support fall through to check-then-rename.
+        if !matches!(err.raw_os_error(), Some(libc::EINVAL | libc::ENOSYS | libc::EOPNOTSUPP)) {
+            return Err(err);
+        }
+    }
+    if fs::symlink_metadata(dst).is_ok() {
+        return Err(io::ErrorKind::AlreadyExists.into());
+    }
+    fs::rename(src, dst)
+}
+
+/// Move `src` into `dir` as `name`, or `name (1)`… if taken. Never overwrites.
+pub fn rename_unique(src: &Path, dir: &Path, name: &str) -> io::Result<PathBuf> {
+    for _ in 0..100 {
+        let target = unique_path(dir, name);
+        match rename_noreplace(src, &target) {
+            Ok(()) => return Ok(target),
+            // Someone took the name in the meantime: pick the next one.
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(io::Error::new(io::ErrorKind::AlreadyExists, "Could not find a free name"))
+}
+
+static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Create a fresh hidden temp file in `dir` for an upload. `create_new`
+/// refuses anything already at that path, including a planted symlink, so the
+/// data can never be written somewhere else.
+pub fn create_temp(dir: &Path) -> io::Result<(fs::File, PathBuf)> {
+    for _ in 0..100 {
+        let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
+        let path = dir.join(format!(".narwhal-upload-{}-{seq}.part", std::process::id()));
+        match fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(f) => return Ok((f, path)),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(io::Error::new(io::ErrorKind::AlreadyExists, "Could not create a temporary file"))
 }
 
 /// Build an `Entry` for a real path. Returns None if it vanished meanwhile.
@@ -187,7 +248,7 @@ pub fn rename(root: &Path, req: &RenameReq) -> ApiResult<String> {
     if src == root {
         return Err(ApiError::forbidden("The root folder cannot be renamed"));
     }
-    fs::symlink_metadata(&src)?;
+    let src_meta = fs::symlink_metadata(&src)?;
     if req.new_name.contains(['/', '\\']) {
         return Err(ApiError::bad_request("Name may not contain slashes"));
     }
@@ -197,12 +258,20 @@ pub fn rename(root: &Path, req: &RenameReq) -> ApiResult<String> {
     if target == src {
         return normalize_virtual(&req.path);
     }
-    // Allow case-only renames on case-insensitive filesystems, otherwise refuse to clobber.
-    let case_only = target.to_string_lossy().to_lowercase() == src.to_string_lossy().to_lowercase();
-    if !case_only && fs::symlink_metadata(&target).is_ok() {
-        return Err(ApiError::conflict(format!("\"{name}\" already exists")));
+    let exists = || ApiError::conflict(format!("\"{name}\" already exists"));
+    match fs::symlink_metadata(&target) {
+        // Same file under another spelling: a case-only rename on a
+        // case-insensitive filesystem.
+        Ok(t) if t.dev() == src_meta.dev() && t.ino() == src_meta.ino() => fs::rename(&src, &target)?,
+        Ok(_) => return Err(exists()),
+        Err(_) => rename_noreplace(&src, &target).map_err(|e| {
+            if e.kind() == io::ErrorKind::AlreadyExists {
+                exists()
+            } else {
+                e.into()
+            }
+        })?,
     }
-    fs::rename(&src, &target)?;
     let vparent = narwhal_shared::vparent(&normalize_virtual(&req.path)?);
     Ok(vjoin(&vparent, &name))
 }
@@ -233,21 +302,61 @@ pub fn delete(root: &Path, paths: &[String]) -> OpReport {
     report
 }
 
+/// Copy one regular file into a new `dst` (never through an existing path or link).
+fn copy_file(src: &Path, dst: &Path, mode: u32) -> io::Result<()> {
+    let mut from = fs::File::open(src)?;
+    let mut to = fs::OpenOptions::new().write(true).create_new(true).mode(mode).open(dst)?;
+    io::copy(&mut from, &mut to)?;
+    // The create mode is reduced by the umask; apply the source's exact bits.
+    to.set_permissions(fs::Permissions::from_mode(mode))
+}
+
+/// Copy a file, symlink or folder tree to `dst`, which must not exist yet.
+/// Iterative, so deep trees cannot overflow the stack. On failure, anything
+/// already created at `dst` is removed again.
 pub fn copy_recursive(src: &Path, dst: &Path) -> io::Result<()> {
-    let meta = fs::symlink_metadata(src)?;
-    let ft = meta.file_type();
-    if ft.is_symlink() {
-        std::os::unix::fs::symlink(fs::read_link(src)?, dst)
-    } else if ft.is_dir() {
-        fs::create_dir(dst)?;
-        for de in fs::read_dir(src)? {
-            let de = de?;
-            copy_recursive(&de.path(), &dst.join(de.file_name()))?;
-        }
-        fs::set_permissions(dst, meta.permissions())
-    } else {
-        fs::copy(src, dst).map(|_| ())
+    let mut created = false;
+    let res = copy_tree(src, dst, &mut created);
+    if res.is_err() && created {
+        let _ = remove_any(dst);
     }
+    res
+}
+
+fn copy_tree(src: &Path, dst: &Path, created: &mut bool) -> io::Result<()> {
+    let mut stack = vec![(src.to_path_buf(), dst.to_path_buf())];
+    // Folder permissions are applied last, so read-only folders can be filled first.
+    let mut dirs = Vec::new();
+    while let Some((s, d)) = stack.pop() {
+        let meta = fs::symlink_metadata(&s)?;
+        let ft = meta.file_type();
+        if ft.is_symlink() {
+            std::os::unix::fs::symlink(fs::read_link(&s)?, &d)?;
+        } else if ft.is_dir() {
+            fs::create_dir(&d)?;
+            *created = true;
+            for de in fs::read_dir(&s)? {
+                let de = de?;
+                stack.push((de.path(), d.join(de.file_name())));
+            }
+            dirs.push((d, meta.permissions()));
+            continue;
+        } else if ft.is_file() {
+            copy_file(&s, &d, meta.permissions().mode() & 0o7777)?;
+        } else {
+            // FIFOs, sockets and devices: opening a FIFO would block forever.
+            let name = s.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("\"{name}\" is a special file and cannot be copied"),
+            ));
+        }
+        *created = true;
+    }
+    for (d, perms) in dirs.into_iter().rev() {
+        fs::set_permissions(d, perms)?;
+    }
+    Ok(())
 }
 
 fn transfer_one(root: &Path, vp: &str, dest: &Path, op: TransferOp) -> ApiResult<()> {
@@ -256,30 +365,34 @@ fn transfer_one(root: &Path, vp: &str, dest: &Path, op: TransferOp) -> ApiResult
         return Err(ApiError::forbidden("The root folder cannot be moved"));
     }
     fs::symlink_metadata(&src)?;
-    if dest.starts_with(&src) {
-        return Err(ApiError::bad_request("A folder cannot be copied or moved into itself"));
-    }
     let name = src
         .file_name()
         .ok_or_else(|| ApiError::bad_request("Invalid path"))?
         .to_string_lossy()
         .into_owned();
-    if op == TransferOp::Move && src.parent() == Some(dest) {
+    // Compare real locations, so a symlinked destination cannot point back
+    // into the source. The source's own last component is not followed: a
+    // symlink is copied or moved as a link.
+    let src_parent = src
+        .parent()
+        .ok_or_else(|| ApiError::bad_request("Invalid path"))?
+        .canonicalize()?;
+    let src_real = src_parent.join(&name);
+    let dest_real = dest.canonicalize()?;
+    if dest_real.starts_with(&src_real) {
+        return Err(ApiError::bad_request("A folder cannot be copied or moved into itself"));
+    }
+    if op == TransferOp::Move && src_parent == dest_real {
         return Ok(()); // Moving onto itself: nothing to do.
     }
-    let target = unique_path(dest, &name);
     match op {
-        TransferOp::Copy => {
-            if let Err(e) = copy_recursive(&src, &target) {
-                let _ = remove_any(&target);
-                return Err(e.into());
-            }
-        }
-        TransferOp::Move => match fs::rename(&src, &target) {
-            Ok(()) => {}
+        TransferOp::Copy => copy_recursive(&src, &unique_path(dest, &name))?,
+        TransferOp::Move => match rename_unique(&src, dest, &name) {
+            Ok(_) => {}
             // Different filesystems (e.g. two volumes): copy then delete.
+            // copy_recursive cleans up a partial copy if it fails.
             Err(e) if e.raw_os_error() == Some(libc::EXDEV) => {
-                copy_recursive(&src, &target)?;
+                copy_recursive(&src, &unique_path(dest, &name))?;
                 remove_any(&src)?;
             }
             Err(e) => return Err(e.into()),
@@ -490,6 +603,132 @@ mod tests {
         let hits = search(&root, "/", "B.TXT", 10).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].path, "/docs/sub/b.txt");
+    }
+
+    #[test]
+    fn case_only_rename_does_not_clobber_another_file() {
+        let (_t, root) = setup();
+        fs::write(root.join("Foo"), b"one").unwrap();
+        fs::write(root.join("foo"), b"two").unwrap();
+        let r = rename(&root, &RenameReq { path: "/Foo".into(), new_name: "foo".into() });
+        assert_eq!(r.unwrap_err().status, axum::http::StatusCode::CONFLICT);
+        assert_eq!(fs::read(root.join("Foo")).unwrap(), b"one");
+        assert_eq!(fs::read(root.join("foo")).unwrap(), b"two");
+    }
+
+    #[test]
+    fn case_only_rename_works_when_free() {
+        let (_t, root) = setup();
+        fs::write(root.join("Foo"), b"one").unwrap();
+        let p = rename(&root, &RenameReq { path: "/Foo".into(), new_name: "foo".into() }).unwrap();
+        assert_eq!(p, "/foo");
+        assert_eq!(fs::read(root.join("foo")).unwrap(), b"one");
+    }
+
+    #[test]
+    fn rename_noreplace_refuses_existing_target() {
+        let (_t, root) = setup();
+        let err = rename_noreplace(&root.join("docs/a.txt"), &root.join("docs/sub/b.txt")).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(root.join("docs/sub/b.txt")).unwrap(), b"world!");
+        assert!(root.join("docs/a.txt").exists());
+    }
+
+    #[test]
+    fn rename_unique_picks_a_free_name() {
+        let (_t, root) = setup();
+        fs::write(root.join("up.part"), b"new").unwrap();
+        let t = rename_unique(&root.join("up.part"), &root.join("docs"), "a.txt").unwrap();
+        assert_eq!(t, root.join("docs/a (1).txt"));
+        assert_eq!(fs::read(root.join("docs/a.txt")).unwrap(), b"hello");
+    }
+
+    #[test]
+    fn copy_into_itself_through_symlink_is_rejected() {
+        let (_t, root) = setup();
+        std::os::unix::fs::symlink("docs", root.join("link")).unwrap();
+        for op in [TransferOp::Copy, TransferOp::Move] {
+            let r = transfer(&root, &TransferReq { paths: vec!["/docs".into()], dest: "/link".into(), op })
+                .unwrap();
+            assert_eq!((r.done, r.errors.len()), (0, 1), "{op:?} into itself via a link must fail");
+        }
+        let r = transfer(
+            &root,
+            &TransferReq { paths: vec!["/docs".into()], dest: "/link/sub".into(), op: TransferOp::Copy },
+        )
+        .unwrap();
+        assert_eq!(r.errors.len(), 1);
+        assert!(!root.join("docs/docs").exists());
+        assert!(!root.join("docs/sub/docs").exists());
+    }
+
+    #[test]
+    fn moving_a_symlink_moves_the_link_itself() {
+        let (_t, root) = setup();
+        std::os::unix::fs::symlink("docs", root.join("docs/sub/up")).unwrap();
+        // The link points at an ancestor, but moving the link (not its target) is fine.
+        let r = transfer(
+            &root,
+            &TransferReq { paths: vec!["/docs/sub/up".into()], dest: "/".into(), op: TransferOp::Move },
+        )
+        .unwrap();
+        assert_eq!(r.done, 1, "{:?}", r.errors);
+        assert!(fs::symlink_metadata(root.join("up")).unwrap().file_type().is_symlink());
+    }
+
+    #[test]
+    fn copy_preserves_tree_links_and_permissions() {
+        let (_t, root) = setup();
+        std::os::unix::fs::symlink("a.txt", root.join("docs/ln")).unwrap();
+        fs::set_permissions(root.join("docs/a.txt"), fs::Permissions::from_mode(0o640)).unwrap();
+        fs::set_permissions(root.join("docs/sub"), fs::Permissions::from_mode(0o555)).unwrap();
+        copy_recursive(&root.join("docs"), &root.join("copy")).unwrap();
+        assert_eq!(fs::read(root.join("copy/sub/b.txt")).unwrap(), b"world!");
+        assert_eq!(fs::read_link(root.join("copy/ln")).unwrap(), Path::new("a.txt"));
+        let mode = |p: &str| fs::metadata(root.join(p)).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode("copy/a.txt"), 0o640);
+        assert_eq!(mode("copy/sub"), 0o555);
+        fs::set_permissions(root.join("docs/sub"), fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(root.join("copy/sub"), fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[test]
+    fn copy_handles_deep_trees_without_stack_overflow() {
+        let (_t, root) = setup();
+        let mut deep = root.join("deep");
+        for _ in 0..1500 {
+            deep.push("d");
+        }
+        fs::create_dir_all(&deep).unwrap();
+        copy_recursive(&root.join("deep"), &root.join("deep2")).unwrap();
+        assert!(root.join("deep2").join(deep.strip_prefix(root.join("deep")).unwrap()).is_dir());
+    }
+
+    #[test]
+    fn failed_copy_cleans_up_and_never_overwrites() {
+        let (_t, root) = setup();
+        let fifo = std::ffi::CString::new(root.join("docs/sub/pipe").into_os_string().into_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o644) }, 0);
+        assert!(copy_recursive(&root.join("docs"), &root.join("copy")).is_err());
+        assert!(!root.join("copy").exists(), "partial copy must be removed");
+        // An existing destination is refused and left alone.
+        assert!(copy_recursive(&root.join("docs/a.txt"), &root.join("docs/sub/b.txt")).is_err());
+        assert_eq!(fs::read(root.join("docs/sub/b.txt")).unwrap(), b"world!");
+    }
+
+    #[test]
+    fn upload_temp_never_follows_a_planted_symlink() {
+        let (_t, root) = setup();
+        let outside = tempfile::tempdir().unwrap();
+        // Plant dangling links outside the root under the next temp names.
+        let next = TEMP_SEQ.load(Ordering::Relaxed);
+        for seq in next..next + 50 {
+            let name = format!(".narwhal-upload-{}-{seq}.part", std::process::id());
+            std::os::unix::fs::symlink(outside.path().join(&name), root.join("docs").join(&name)).unwrap();
+        }
+        let (_f, tmp) = create_temp(&root.join("docs")).unwrap();
+        assert!(fs::symlink_metadata(&tmp).unwrap().file_type().is_file());
+        assert_eq!(fs::read_dir(outside.path()).unwrap().count(), 0, "nothing may be written outside the root");
     }
 
     #[test]

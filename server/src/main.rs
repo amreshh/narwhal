@@ -7,8 +7,9 @@ mod fsops;
 use axum::{
     body::Body,
     extract::{multipart::Field, DefaultBodyLimit, Multipart, Query, Request, State},
-    http::{header, HeaderValue},
-    response::Response,
+    http::{header, HeaderMap, HeaderValue, Method},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
     routing::{any, get, post},
     Json, Router,
 };
@@ -21,10 +22,7 @@ use narwhal_shared::{
 use std::{
     net::SocketAddr,
     path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
+    sync::Arc,
 };
 use tokio::io::AsyncWriteExt;
 use tower::ServiceExt;
@@ -39,6 +37,8 @@ struct Config {
     root_name: String,
     read_only: bool,
     places: Vec<Place>,
+    /// Host names the server answers to; empty = any.
+    allowed_hosts: Vec<String>,
 }
 
 type AppState = Arc<Config>;
@@ -95,6 +95,14 @@ async fn main() {
         root_name: env("NARWHAL_ROOT_NAME").unwrap_or_else(|| "Storage".into()),
         read_only: env_bool("NARWHAL_READ_ONLY"),
         places: env("NARWHAL_PLACES").map(|p| parse_places(&p)).unwrap_or_default(),
+        allowed_hosts: env("NARWHAL_ALLOWED_HOSTS")
+            .map(|v| {
+                v.split(',')
+                    .map(|h| host_without_port(h.trim()).to_ascii_lowercase())
+                    .filter(|h| !h.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default(),
     });
 
     let listener = match listen(bind) {
@@ -135,14 +143,17 @@ async fn main() {
         .route("/api/{*rest}", any(|| async { ApiError::not_found("Unknown API endpoint") }))
         .route("/healthz", get(|| async { "ok" }))
         .layer(body_limit)
-        .with_state(cfg);
+        .with_state(cfg.clone());
 
     // The SPA: hashed assets from trunk, index.html as fallback.
     let spa = Compression::new(
         ServeDir::new(&static_dir).fallback(ServeFile::new(static_dir.join("index.html"))),
     );
 
-    let app = api.fallback_service(spa).layer(TraceLayer::new_for_http());
+    let app = api
+        .fallback_service(spa)
+        .layer(middleware::from_fn_with_state(cfg, guard))
+        .layer(TraceLayer::new_for_http());
 
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
@@ -201,6 +212,83 @@ async fn shutdown_signal() {
         _ = term => {},
     }
     tracing::info!("shutting down");
+}
+
+// ---------------------------------------------------------------------------
+// Request guard
+// ---------------------------------------------------------------------------
+
+/// `example.com:8080` -> `example.com`, `[::1]:8080` -> `[::1]`.
+fn host_without_port(host: &str) -> &str {
+    if host.starts_with('[') {
+        return host.find(']').map_or(host, |i| &host[..=i]);
+    }
+    match host.rsplit_once(':') {
+        Some((h, port)) if !h.contains(':') && port.bytes().all(|b| b.is_ascii_digit()) => h,
+        _ => host,
+    }
+}
+
+/// Decide whether a request may proceed.
+///
+/// - With `allowed_hosts` set, other host names are refused. This stops DNS
+///   rebinding, where a malicious site points its own domain at this server.
+/// - Writes (anything but GET/HEAD/OPTIONS) must come from this app's own
+///   origin. This stops cross-site request forgery, e.g. a page elsewhere
+///   posting a multipart upload with the user's cookies.
+fn check_request(
+    method: &Method,
+    host: Option<&str>,
+    headers: &HeaderMap,
+    allowed_hosts: &[String],
+) -> Result<(), &'static str> {
+    if !allowed_hosts.is_empty() {
+        let name = host.map(|h| host_without_port(h).to_ascii_lowercase()).unwrap_or_default();
+        if !allowed_hosts.contains(&name) {
+            return Err("Unknown host name");
+        }
+    }
+    if matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS) {
+        return Ok(());
+    }
+    let header = |name: header::HeaderName| headers.get(name).and_then(|v| v.to_str().ok());
+    // Modern browsers say where a request comes from.
+    match header(header::HeaderName::from_static("sec-fetch-site")) {
+        Some("same-origin" | "none") => return Ok(()),
+        Some(_) => return Err("Cross-site requests are not allowed"),
+        None => {}
+    }
+    // Older browsers: the Origin, if sent, must match the Host. Non-browser
+    // clients (curl, scripts) send neither header and are let through.
+    if let Some(origin) = header(header::ORIGIN) {
+        let origin_host = origin.split_once("://").map(|(_, rest)| rest);
+        if origin_host.is_none() || origin_host != host {
+            return Err("Cross-site requests are not allowed");
+        }
+    }
+    Ok(())
+}
+
+async fn guard(State(cfg): State<AppState>, req: Request, next: Next) -> Response {
+    // Kubelet probes use the pod IP as host name.
+    if req.uri().path() != "/healthz" {
+        // HTTP/2 carries the host in the URI authority instead of a Host header.
+        let host = req
+            .headers()
+            .get(header::HOST)
+            .and_then(|v| v.to_str().ok())
+            .or_else(|| req.uri().authority().map(|a| a.as_str()));
+        if let Err(msg) = check_request(req.method(), host, req.headers(), &cfg.allowed_hosts) {
+            tracing::warn!(method = %req.method(), uri = %req.uri(), host = ?host, "refused: {msg}");
+            return ApiError::forbidden(msg).into_response();
+        }
+    }
+    let mut res = next.run(req).await;
+    // The app must not be framed by other sites (clickjacking).
+    res.headers_mut()
+        .entry(header::X_FRAME_OPTIONS)
+        .or_insert(HeaderValue::from_static("DENY"));
+    res
 }
 
 // ---------------------------------------------------------------------------
@@ -341,7 +429,17 @@ async fn download(
     Ok(res)
 }
 
-static UPLOAD_SEQ: AtomicU64 = AtomicU64::new(0);
+/// Deletes an upload's temp file when dropped, unless disarmed. This also
+/// covers a request that is cancelled mid-upload (its future is dropped).
+struct TempGuard(Option<PathBuf>);
+
+impl Drop for TempGuard {
+    fn drop(&mut self) {
+        if let Some(p) = self.0.take() {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}
 
 async fn upload(
     State(cfg): State<AppState>,
@@ -369,29 +467,35 @@ async fn upload(
             }
         };
         // Write to a hidden temp file first so readers never see partial files.
-        let seq = UPLOAD_SEQ.fetch_add(1, Ordering::Relaxed);
-        let tmp = dir.join(format!(".{name}.{}-{seq}.part", std::process::id()));
-        match write_field(&mut field, &tmp).await {
-            Ok(()) => {
-                let target = fsops::unique_path(&dir, &name);
-                if let Err(e) = tokio::fs::rename(&tmp, &target).await {
-                    let _ = tokio::fs::remove_file(&tmp).await;
-                    report.errors.push(format!("{name}: {}", ApiError::from(e).message));
-                } else {
-                    report.done += 1;
-                }
-            }
+        let d = dir.clone();
+        let (file, tmp) = match blocking(move || fsops::create_temp(&d).map_err(ApiError::from)).await {
+            Ok(v) => v,
             Err(e) => {
-                let _ = tokio::fs::remove_file(&tmp).await;
                 report.errors.push(format!("{name}: {}", e.message));
+                continue;
             }
+        };
+        let mut tmp_guard = TempGuard(Some(tmp.clone()));
+        let result = async {
+            write_field(&mut field, tokio::fs::File::from_std(file)).await?;
+            // Never replaces an existing file, even one created meanwhile.
+            let d = dir.clone();
+            let n = name.clone();
+            blocking(move || fsops::rename_unique(&tmp, &d, &n).map_err(ApiError::from)).await
+        }
+        .await;
+        match result {
+            Ok(_) => {
+                tmp_guard.0 = None;
+                report.done += 1;
+            }
+            Err(e) => report.errors.push(format!("{name}: {}", e.message)),
         }
     }
     Ok(Json(report))
 }
 
-async fn write_field(field: &mut Field<'_>, tmp: &Path) -> ApiResult<()> {
-    let mut file = tokio::fs::File::create(tmp).await?;
+async fn write_field(field: &mut Field<'_>, mut file: tokio::fs::File) -> ApiResult<()> {
     while let Some(chunk) = field
         .chunk()
         .await
@@ -414,5 +518,52 @@ mod tests {
         assert_eq!(p.len(), 2);
         assert_eq!(p[1].name, "Media");
         assert_eq!(p[1].path, "/media");
+    }
+
+    fn headers(pairs: &[(&'static str, &'static str)]) -> HeaderMap {
+        pairs
+            .iter()
+            .map(|(k, v)| (header::HeaderName::from_static(k), HeaderValue::from_static(v)))
+            .collect()
+    }
+
+    #[test]
+    fn host_names() {
+        assert_eq!(host_without_port("example.com:8080"), "example.com");
+        assert_eq!(host_without_port("example.com"), "example.com");
+        assert_eq!(host_without_port("[::1]:8080"), "[::1]");
+        assert_eq!(host_without_port("[::1]"), "[::1]");
+        assert_eq!(host_without_port("::1"), "::1");
+    }
+
+    #[test]
+    fn cross_site_writes_are_refused() {
+        let host = Some("files.example.com");
+        let post = &Method::POST;
+        // Same origin, by fetch metadata or by Origin header.
+        assert!(check_request(post, host, &headers(&[("sec-fetch-site", "same-origin")]), &[]).is_ok());
+        assert!(check_request(post, host, &headers(&[("origin", "https://files.example.com")]), &[]).is_ok());
+        // Non-browser clients send neither.
+        assert!(check_request(post, host, &headers(&[]), &[]).is_ok());
+        // Another site.
+        assert!(check_request(post, host, &headers(&[("sec-fetch-site", "cross-site")]), &[]).is_err());
+        assert!(check_request(post, host, &headers(&[("sec-fetch-site", "same-site")]), &[]).is_err());
+        assert!(check_request(post, host, &headers(&[("origin", "https://evil.example")]), &[]).is_err());
+        assert!(check_request(post, host, &headers(&[("origin", "null")]), &[]).is_err());
+        // Reads are not affected.
+        assert!(check_request(&Method::GET, host, &headers(&[("sec-fetch-site", "cross-site")]), &[]).is_ok());
+    }
+
+    #[test]
+    fn unknown_hosts_are_refused_when_configured() {
+        let allowed = vec!["files.example.com".to_string(), "localhost".to_string()];
+        let get = &Method::GET;
+        assert!(check_request(get, Some("files.example.com"), &headers(&[]), &allowed).is_ok());
+        assert!(check_request(get, Some("localhost:8080"), &headers(&[]), &allowed).is_ok());
+        assert!(check_request(get, Some("FILES.example.com:443"), &headers(&[]), &allowed).is_ok());
+        assert!(check_request(get, Some("rebind.evil.example"), &headers(&[]), &allowed).is_err());
+        assert!(check_request(get, None, &headers(&[]), &allowed).is_err());
+        // Without a list, any host is accepted.
+        assert!(check_request(get, Some("anything"), &headers(&[]), &[]).is_ok());
     }
 }
