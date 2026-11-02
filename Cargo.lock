@@ -1165,9 +1165,10 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "futures-util",
- "libc",
+ "mime_guess",
  "narwhal-shared",
  "percent-encoding",
+ "rustix",
  "serde",
  "serde_json",
  "sha2",
