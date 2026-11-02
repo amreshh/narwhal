@@ -75,14 +75,56 @@ fn label(vp: &str) -> &str {
 /// Validate a single file or folder name supplied by the client.
 pub fn sanitize_name(raw: &str) -> ApiResult<String> {
     // Browsers may send a full path for uploads on some platforms; keep the basename.
-    let name = raw.rsplit(['/', '\\']).next().unwrap_or("").trim();
-    if name.is_empty() || name == "." || name == ".." || name.contains('\0') {
+    check_name(raw.rsplit(['/', '\\']).next().unwrap_or(""))
+}
+
+fn check_name(raw: &str) -> ApiResult<String> {
+    let name = raw.trim();
+    if name.is_empty() || name == "." || name == ".." || name.contains(['\0', '/', '\\']) {
         return Err(ApiError::bad_request("Invalid name"));
     }
     if name.len() > 255 {
         return Err(ApiError::bad_request("Name is too long"));
     }
     Ok(name.to_string())
+}
+
+/// Split the relative path of an uploaded file (`photos/2024/a.jpg`, sent
+/// for folder uploads) into its folders and its file name. Every component
+/// is validated, so `..` and the like are refused.
+pub fn split_upload_path(rel: &str) -> ApiResult<(Vec<String>, String)> {
+    let mut parts = rel
+        .split('/')
+        .filter(|p| !p.is_empty())
+        .map(check_name)
+        .collect::<ApiResult<Vec<_>>>()?;
+    let name = parts.pop().ok_or_else(|| ApiError::bad_request("Invalid name"))?;
+    Ok((parts, name))
+}
+
+/// Create the folders `dirs` below `base` (which must be inside `root`) as
+/// needed and return the deepest one. Existing folders are reused, but only
+/// if they really are folders that stay inside the root.
+pub fn make_upload_dirs(root: &Path, base: &Path, dirs: &[String]) -> ApiResult<PathBuf> {
+    let mut path = base.to_path_buf();
+    for d in dirs {
+        path.push(d);
+        match fs::create_dir(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                // Could be a symlink: check where it leads.
+                let real = path.canonicalize()?;
+                if !real.starts_with(root) {
+                    return Err(ApiError::forbidden("Path is outside the storage root"));
+                }
+                if !real.is_dir() {
+                    return Err(ApiError::conflict(format!("'{d}' already exists and is not a folder")));
+                }
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(path)
 }
 
 /// `dir/name` if free, otherwise `dir/stem (1).ext`, `dir/stem (2).ext`, ...
@@ -738,5 +780,34 @@ mod tests {
         assert_eq!(unique_path(&root.join("docs"), "new.txt"), root.join("docs/new.txt"));
         assert!(sanitize_name("..").is_err());
         assert_eq!(sanitize_name("C:\\x\\y.png").unwrap(), "y.png");
+    }
+
+    #[test]
+    fn upload_paths() {
+        let (dirs, name) = split_upload_path("photos//2024/a.jpg").unwrap();
+        assert_eq!(dirs, ["photos", "2024"]);
+        assert_eq!(name, "a.jpg");
+        assert_eq!(split_upload_path("a.jpg").unwrap(), (vec![], "a.jpg".to_string()));
+        assert!(split_upload_path("photos/../../etc/passwd").is_err());
+        assert!(split_upload_path("a/./b").is_err());
+        assert!(split_upload_path("").is_err());
+    }
+
+    #[test]
+    fn upload_dirs_stay_inside_root() {
+        let (_t, root) = setup();
+        let docs = root.join("docs");
+        let d = make_upload_dirs(&root, &docs, &["new".into(), "deep".into()]).unwrap();
+        assert_eq!(d, docs.join("new/deep"));
+        assert!(d.is_dir());
+        // Existing folders are reused.
+        assert_eq!(make_upload_dirs(&root, &docs, &["sub".into()]).unwrap(), docs.join("sub"));
+        // A file in the way is refused.
+        assert!(make_upload_dirs(&root, &docs, &["a.txt".into()]).is_err());
+        // A symlink leading out of the root is refused.
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), docs.join("out")).unwrap();
+        assert!(make_upload_dirs(&root, &docs, &["out".into(), "x".into()]).is_err());
+        assert_eq!(fs::read_dir(outside.path()).unwrap().count(), 0);
     }
 }

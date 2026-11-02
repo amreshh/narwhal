@@ -222,6 +222,84 @@ pub fn file_list(fl: &web_sys::FileList) -> Vec<web_sys::File> {
     (0..fl.length()).filter_map(|i| fl.get(i)).collect()
 }
 
+/// Files from a file input, each with its path relative to the upload
+/// folder: just the name, or `folder/sub/name` when a folder was picked.
+pub fn upload_items(fl: &web_sys::FileList) -> Vec<(String, web_sys::File)> {
+    file_list(fl)
+        .into_iter()
+        .map(|f| {
+            let rel = js_sys::Reflect::get(&f, &"webkitRelativePath".into())
+                .ok()
+                .and_then(|v| v.as_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| f.name());
+            (rel, f)
+        })
+        .collect()
+}
+
+/// Entries of a drop, which may include folders. Must be called while the
+/// drop event is being handled: the browser clears the items afterwards.
+pub fn dropped_entries(dt: &web_sys::DataTransfer) -> Vec<web_sys::FileSystemEntry> {
+    let items = dt.items();
+    (0..items.length())
+        .filter_map(|i| items.get(i))
+        .filter(|it| it.kind() == "file")
+        .filter_map(|it| it.webkit_get_as_entry().ok().flatten())
+        .collect()
+}
+
+/// Walk dropped entries, descending into folders, and return every file
+/// with its relative path. Empty folders are skipped.
+pub async fn read_entries(
+    entries: Vec<web_sys::FileSystemEntry>,
+) -> Result<Vec<(String, web_sys::File)>, String> {
+    use js_sys::{Array, Promise};
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen_futures::JsFuture;
+    use web_sys::{FileSystemDirectoryEntry, FileSystemEntry, FileSystemFileEntry};
+
+    let fail = |e: wasm_bindgen::JsValue| {
+        let msg = js_sys::Reflect::get(&e, &"message".into()).ok().and_then(|m| m.as_string());
+        format!("Could not read the dropped items: {}", msg.unwrap_or_else(|| format!("{e:?}")))
+    };
+    let mut out = Vec::new();
+    let mut stack: Vec<(String, FileSystemEntry)> = entries.into_iter().map(|e| (e.name(), e)).collect();
+    while let Some((path, entry)) = stack.pop() {
+        if entry.is_directory() {
+            let reader = entry.unchecked_ref::<FileSystemDirectoryEntry>().create_reader();
+            // readEntries returns results in batches; an empty one means done.
+            loop {
+                let batch = JsFuture::from(Promise::new(&mut |resolve, reject| {
+                    if let Err(e) = reader.read_entries_with_callback_and_callback(&resolve, &reject) {
+                        let _ = reject.call1(&wasm_bindgen::JsValue::NULL, &e);
+                    }
+                }))
+                .await
+                .map_err(fail)?
+                .unchecked_into::<Array>();
+                if batch.length() == 0 {
+                    break;
+                }
+                for e in batch.iter() {
+                    let e: FileSystemEntry = e.unchecked_into();
+                    stack.push((format!("{path}/{}", e.name()), e));
+                }
+            }
+        } else if entry.is_file() {
+            let file_entry = entry.unchecked_ref::<FileSystemFileEntry>();
+            let file = JsFuture::from(Promise::new(&mut |resolve, reject| {
+                file_entry.file_with_callback_and_callback(&resolve, &reject)
+            }))
+            .await
+            .map_err(fail)?;
+            out.push((path, file.unchecked_into()));
+        }
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(out)
+}
+
 /// UTF-16 length of the name without its extension (for selecting it in an input).
 pub fn stem_utf16_len(name: &str) -> u32 {
     let stem = match name.rfind('.') {

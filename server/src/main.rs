@@ -453,17 +453,43 @@ async fn upload(
     }
 
     let mut report = OpReport::default();
+    // For folder uploads the client sends a `path` field (e.g. `photos/2024/a.jpg`)
+    // right before each file; it applies to that file only.
+    let mut rel_path: Option<String> = None;
     while let Some(mut field) = multipart
         .next_field()
         .await
         .map_err(|e| ApiError::bad_request(e.to_string()))?
     {
-        let Some(raw) = field.file_name().map(str::to_owned) else { continue };
-        let name = match fsops::sanitize_name(&raw) {
-            Ok(n) => n,
+        if field.file_name().is_none() {
+            if field.name() == Some("path") {
+                rel_path = Some(field.text().await.map_err(|e| ApiError::bad_request(e.to_string()))?);
+            }
+            continue;
+        }
+        let raw = field.file_name().unwrap_or_default().to_owned();
+        let shown = rel_path.clone().unwrap_or_else(|| raw.clone());
+        let parsed = match rel_path.take() {
+            Some(rel) => fsops::split_upload_path(&rel),
+            None => fsops::sanitize_name(&raw).map(|n| (Vec::new(), n)),
+        };
+        let (subdirs, name) = match parsed {
+            Ok(v) => v,
             Err(e) => {
-                report.errors.push(format!("{raw}: {}", e.message));
+                report.errors.push(format!("{shown}: {}", e.message));
                 continue;
+            }
+        };
+        let dir = if subdirs.is_empty() {
+            dir.clone()
+        } else {
+            let (root, base) = (cfg.root.clone(), dir.clone());
+            match blocking(move || fsops::make_upload_dirs(&root, &base, &subdirs)).await {
+                Ok(d) => d,
+                Err(e) => {
+                    report.errors.push(format!("{shown}: {}", e.message));
+                    continue;
+                }
             }
         };
         // Write to a hidden temp file first so readers never see partial files.
@@ -471,7 +497,7 @@ async fn upload(
         let (file, tmp) = match blocking(move || fsops::create_temp(&d).map_err(ApiError::from)).await {
             Ok(v) => v,
             Err(e) => {
-                report.errors.push(format!("{name}: {}", e.message));
+                report.errors.push(format!("{shown}: {}", e.message));
                 continue;
             }
         };
@@ -489,7 +515,7 @@ async fn upload(
                 tmp_guard.0 = None;
                 report.done += 1;
             }
-            Err(e) => report.errors.push(format!("{name}: {}", e.message)),
+            Err(e) => report.errors.push(format!("{shown}: {}", e.message)),
         }
     }
     Ok(Json(report))

@@ -812,17 +812,20 @@ impl AppState {
         });
     }
 
-    pub fn pick_upload(&self, i: usize) {
+    /// Open the browser's picker for files, or for a whole folder.
+    pub fn pick_upload(&self, i: usize, folder: bool) {
         if self.read_only() {
             return;
         }
         self.upload_dest.set(Some(self.panes[i].path.get_untracked()));
         if let Some(input) = self.upload_input.get_untracked() {
+            input.set_webkitdirectory(folder);
             input.click();
         }
     }
 
-    pub fn upload(&self, dest: String, files: Vec<web_sys::File>) {
+    /// Upload files, each given with its path relative to `dest`.
+    pub fn upload(&self, dest: String, files: Vec<(String, web_sys::File)>) {
         if files.is_empty() {
             return;
         }
@@ -830,7 +833,12 @@ impl AppState {
             self.error("This storage is read-only");
             return;
         }
-        let label = if files.len() == 1 { files[0].name() } else { format!("{} files", files.len()) };
+        let tops: HashSet<&str> = files.iter().map(|(p, _)| p.split('/').next().unwrap_or("")).collect();
+        let label = match (files.len(), tops.len()) {
+            (1, _) => vname(&files[0].0).to_string(),
+            (n, 1) if files[0].0.contains('/') => format!("{} ({n} files)", files[0].0.split('/').next().unwrap_or("")),
+            (n, _) => format!("{n} files"),
+        };
         let up = self.upload;
         up.set(Some(Upload { label, progress: 0.0 }));
         let st = *self;
@@ -868,8 +876,23 @@ impl AppState {
             self.transfer(paths, dest, op);
             return;
         }
-        let files = ev.data_transfer().and_then(|dt| dt.files()).map(|fl| util::file_list(&fl)).unwrap_or_default();
-        self.upload(dest, files);
+        let Some(dt) = ev.data_transfer() else { return };
+        // Folders can only be read through entries; fall back to the plain
+        // file list in browsers without them.
+        let entries = util::dropped_entries(&dt);
+        if entries.is_empty() {
+            let files = dt.files().map(|fl| util::upload_items(&fl)).unwrap_or_default();
+            self.upload(dest, files);
+            return;
+        }
+        let st = *self;
+        spawn_local(async move {
+            match util::read_entries(entries).await {
+                Ok(files) if files.is_empty() => st.error("Nothing to upload: the dropped folders are empty"),
+                Ok(files) => st.upload(dest, files),
+                Err(e) => st.error(e),
+            }
+        });
     }
 
     // -- search ----------------------------------------------------------------

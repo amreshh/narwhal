@@ -74,7 +74,7 @@ pub fn App() -> impl IntoView {
 
     let on_files = move |_: ev::Event| {
         if let Some(input) = st.upload_input.get_untracked() {
-            let files = input.files().map(|fl| util::file_list(&fl)).unwrap_or_default();
+            let files = input.files().map(|fl| util::upload_items(&fl)).unwrap_or_default();
             if let Some(dest) = st.upload_dest.get_untracked() {
                 st.upload(dest, files);
             }
@@ -277,8 +277,12 @@ fn Toolbar() -> impl IntoView {
                         <span class="ic" inner_html=icons::NEW_FOLDER></span><span class="tl">"New Folder"</span>
                     </button>
                     <button class="tb labeled" title="Upload files into this folder"
-                        on:click=move |_| st.pick_upload(st.active_index())>
+                        on:click=move |_| st.pick_upload(st.active_index(), false)>
                         <span class="ic" inner_html=icons::UPLOAD></span><span class="tl">"Upload"</span>
+                    </button>
+                    <button class="tb labeled" title="Upload a folder with its contents into this folder"
+                        on:click=move |_| st.pick_upload(st.active_index(), true)>
+                        <span class="ic" inner_html=icons::UPLOAD_FOLDER></span><span class="tl">"Upload Folder"</span>
                     </button>
                 </div>
             </Show>
@@ -1019,7 +1023,8 @@ fn background_menu(st: AppState, i: usize, ro: bool) -> AnyView {
     let create = view! {
         {(!ro).then(|| mi(st, "New Folder…", "F7", icons::NEW_FOLDER, move || st.dialog.set(Some(Dialog::NewFolder(i)))))}
         {(!ro).then(|| mi(st, "New Text File…", "", icons::NEW_FILE, move || st.dialog.set(Some(Dialog::NewFile(i)))))}
-        {(!ro).then(|| mi(st, "Upload Files…", "", icons::UPLOAD, move || st.pick_upload(i)))}
+        {(!ro).then(|| mi(st, "Upload Files…", "", icons::UPLOAD, move || st.pick_upload(i, false)))}
+        {(!ro).then(|| mi(st, "Upload Folder…", "", icons::UPLOAD_FOLDER, move || st.pick_upload(i, true)))}
         {(!ro && has_clip).then(|| mi(st, "Paste", "Ctrl+V", icons::PASTE, move || st.paste(i, None)))}
         {(!ro).then(|| view! { <div class="msep"></div> })}
         {mi(st, "Select All", "Ctrl+A", icons::SELECT_ALL, move || st.select_all(i))}

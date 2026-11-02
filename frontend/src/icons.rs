@@ -25,6 +25,7 @@ glyph!(MENU, r#"<path d="M2.5 4h11M2.5 8h11M2.5 12h11"/>"#);
 glyph!(NEW_FOLDER, r#"<path d="M2 4.5c0-.6.4-1 1-1h3l1.5 1.5H13c.6 0 1 .4 1 1v6.5c0 .6-.4 1-1 1H3c-.6 0-1-.4-1-1z"/><path d="M8 7.5v4M6 9.5h4"/>"#);
 glyph!(NEW_FILE, r#"<path d="M4 1.5h5.5l3 3V14c0 .3-.2.5-.5.5H4c-.3 0-.5-.2-.5-.5V2c0-.3.2-.5.5-.5z"/><path d="M8 7v5M5.5 9.5h5"/>"#);
 glyph!(UPLOAD, r#"<path d="M8 10.5V2.5M4.5 6 8 2.5 11.5 6M2.5 10v2.5c0 .6.4 1 1 1h9c.6 0 1-.4 1-1V10"/>"#);
+glyph!(UPLOAD_FOLDER, r#"<path d="M2 4.5c0-.6.4-1 1-1h3l1.5 1.5H13c.6 0 1 .4 1 1v6.5c0 .6-.4 1-1 1H3c-.6 0-1-.4-1-1z"/><path d="M8 12V7.5M6 9.5l2-2 2 2"/>"#);
 glyph!(DOWNLOAD, r#"<path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M2.5 10v2.5c0 .6.4 1 1 1h9c.6 0 1-.4 1-1V10"/>"#);
 glyph!(CLOSE, r#"<path d="m4 4 8 8M12 4l-8 8"/>"#);
 glyph!(PREVIEW, r#"<rect x="2" y="3" width="12" height="10" rx="1.5"/><circle cx="5.5" cy="6.5" r="1.2"/><path d="m2.5 12 4-4 3 3 1.5-1.5 2.5 2.5"/>"#);

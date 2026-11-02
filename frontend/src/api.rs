@@ -88,13 +88,18 @@ pub fn download_url(path: &str, inline: bool) -> String {
 }
 
 /// Upload files with XHR so we get progress events (fetch has none for uploads).
+/// Each file comes with its path relative to `dir`; for files inside folders
+/// (`photos/2024/a.jpg`) the server creates the folders.
 pub async fn upload(
     dir: &str,
-    files: Vec<web_sys::File>,
+    files: Vec<(String, web_sys::File)>,
     on_progress: impl Fn(f64) + 'static,
 ) -> ApiResult<OpReport> {
     let form = FormData::new().map_err(js_err)?;
-    for f in &files {
+    for (rel, f) in &files {
+        if rel.contains('/') {
+            form.append_with_str("path", rel).map_err(js_err)?;
+        }
         form.append_with_blob_and_filename("file", f, &f.name()).map_err(js_err)?;
     }
     let xhr = XmlHttpRequest::new().map_err(js_err)?;
