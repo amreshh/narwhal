@@ -1,12 +1,17 @@
 //! Application state (all reactive signals) and the actions that mutate it.
 
 use crate::{api, util};
+pub use crate::upload::FileState;
 use leptos::{html, prelude::*, task::spawn_local};
 use serde::{Deserialize, Serialize};
-use narwhal_shared::{vname, vparent, Entry, Info, OpReport, TransferOp};
+use narwhal_shared::{vname, vparent, Entry, Info, OpReport, TransferOp, TrashItem};
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use wasm_bindgen::JsCast;
+
+/// The pane location that shows the Trash. Not a real path (no leading
+/// `/`), so it can never be sent to the server as one.
+pub const TRASH: &str = "trash:";
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum ViewMode {
@@ -60,15 +65,142 @@ pub enum Dialog {
     NewFolder(usize),
     NewFile(usize),
     ConfirmDelete(Vec<String>),
+    /// Delete these Trash items for good.
+    ConfirmPurge(Vec<String>),
+    ConfirmEmptyTrash,
     Properties(Entry),
     Shortcuts,
 }
 
+/// One file of an upload.
+#[derive(Clone, Debug, PartialEq)]
+pub struct UpFile {
+    /// Path below `dest` (`a.jpg` or `photos/2024/a.jpg`).
+    pub rel: String,
+    /// Folder it goes to.
+    pub dest: String,
+    pub size: f64,
+}
+
+/// The running upload (see `upload.rs`). Files added while it runs join
+/// the end of the list.
 #[derive(Clone, Debug)]
 pub struct Upload {
-    pub label: String,
-    pub progress: f64,
+    pub files: Vec<UpFile>,
+    pub states: Vec<FileState>,
+    /// Bytes of each file sent so far.
+    loaded: Vec<f64>,
+    /// Bytes sent so far, over all files.
+    pub sent: f64,
+    pub total: f64,
+    /// Bytes per second over the last few seconds.
+    pub speed: Option<f64>,
+    /// Recent (time in ms, bytes sent) samples for the speed.
+    samples: std::collections::VecDeque<(f64, f64)>,
 }
+
+impl Upload {
+    fn new(files: Vec<UpFile>) -> Self {
+        let mut u = Self {
+            files: Vec::new(),
+            states: Vec::new(),
+            loaded: Vec::new(),
+            sent: 0.0,
+            total: 0.0,
+            speed: None,
+            samples: Default::default(),
+        };
+        u.append(files);
+        u
+    }
+
+    fn append(&mut self, files: Vec<UpFile>) {
+        self.total += files.iter().map(|f| f.size).sum::<f64>();
+        self.states.extend(files.iter().map(|_| FileState::Waiting));
+        self.loaded.extend(files.iter().map(|_| 0.0));
+        self.files.extend(files);
+    }
+
+    /// The one folder everything goes to, if there is just one.
+    pub fn dest(&self) -> Option<&str> {
+        let first = self.files.first()?.dest.as_str();
+        self.files.iter().all(|f| f.dest == first).then_some(first)
+    }
+
+    /// "photo.jpg", "Holiday (141 files)" or "141 files".
+    pub fn label(&self) -> String {
+        let top = |f: &UpFile| f.rel.split('/').next().unwrap_or("").to_string();
+        match self.files.as_slice() {
+            [one] => vname(&one.rel).to_string(),
+            [first, ..] if self.dest().is_some() && first.rel.contains('/') && self.files.iter().all(|f| top(f) == top(first)) => {
+                format!("{} ({} files)", top(first), self.files.len())
+            }
+            files => format!("{} files", files.len()),
+        }
+    }
+
+    pub fn progress(&self) -> f64 {
+        if self.total > 0.0 {
+            (self.sent / self.total).clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    }
+
+    pub fn loaded(&self, n: usize) -> f64 {
+        self.loaded.get(n).copied().unwrap_or(0.0)
+    }
+
+    /// Seconds left at the current speed.
+    pub fn eta(&self) -> Option<f64> {
+        self.speed.filter(|s| *s > 0.0).map(|s| (self.total - self.sent).max(0.0) / s)
+    }
+
+    /// Cancelled is final: a request that is still winding down can't
+    /// change it back.
+    pub fn set_state(&mut self, n: usize, state: FileState) {
+        if let Some(s) = self.states.get_mut(n).filter(|s| **s != FileState::Cancelled) {
+            *s = state;
+        }
+    }
+
+    /// Stop file `n` if it hasn't finished. Its bytes no longer count
+    /// towards the progress.
+    pub fn cancel(&mut self, n: usize) {
+        let Some(state) = self.states.get_mut(n).filter(|s| s.is_pending()) else { return };
+        *state = FileState::Cancelled;
+        self.total = (self.total - self.files[n].size).max(0.0);
+        self.sent = (self.sent - std::mem::take(&mut self.loaded[n])).max(0.0);
+    }
+
+    pub fn set_loaded(&mut self, n: usize, bytes: f64) {
+        if self.states.get(n) == Some(&FileState::Cancelled) {
+            return;
+        }
+        let Some(l) = self.loaded.get_mut(n) else { return };
+        let bytes = bytes.clamp(0.0, self.files[n].size);
+        self.sent = (self.sent + bytes - *l).max(0.0);
+        *l = bytes;
+        let now = js_sys::Date::now();
+        self.samples.push_back((now, self.sent));
+        while self.samples.len() > 2 && now - self.samples[0].0 > 4000.0 {
+            self.samples.pop_front();
+        }
+        if let (Some(&(t0, b0)), Some(&(t1, b1))) = (self.samples.front(), self.samples.back()) {
+            if t1 - t0 >= 500.0 {
+                self.speed = Some(((b1 - b0) / ((t1 - t0) / 1000.0)).max(0.0));
+            }
+        }
+    }
+}
+
+/// Column view widths in pixels.
+pub const COL_WIDTH_DEFAULT: u32 = 238;
+pub const COL_WIDTH_MIN: u32 = 120;
+pub const COL_WIDTH_MAX: u32 = 900;
+
+/// Most files that can be uploaded at once.
+pub const MAX_PARALLEL: u32 = 16;
 
 pub const ZOOM_STEPS: [u32; 9] = [32, 48, 64, 80, 96, 112, 128, 160, 192];
 
@@ -129,6 +261,12 @@ struct Prefs {
     places: bool,
     sort: SortKey,
     asc: bool,
+    /// Files uploaded at once; None = the server's default.
+    #[serde(default)]
+    parallel: Option<u32>,
+    /// Column view: width of columns without a width of their own.
+    #[serde(default)]
+    col_width: Option<u32>,
 }
 
 const PREFS_KEY: &str = "narwhal.prefs";
@@ -147,6 +285,13 @@ pub struct AppState {
     pub sort: RwSignal<(SortKey, bool)>,
     pub show_hidden: RwSignal<bool>,
     pub previews: RwSignal<bool>,
+    /// Files uploaded at once, if the user picked a number.
+    pub parallel: RwSignal<Option<u32>>,
+    /// Column view: width of every column (Alt+drag sets it).
+    pub col_width: RwSignal<u32>,
+    /// Column view: widths of single resized columns, by folder. Kept for
+    /// this page load only.
+    pub col_widths: RwSignal<HashMap<String, u32>>,
     pub places_open: RwSignal<bool>,
     pub info: RwSignal<Option<Info>>,
     pub clip: RwSignal<Option<Clip>>,
@@ -156,6 +301,10 @@ pub struct AppState {
     pub renaming: RwSignal<Option<(usize, String)>>,
     pub message: RwSignal<Option<(MsgKind, String)>>,
     pub upload: RwSignal<Option<Upload>>,
+    /// The upload details panel is open.
+    pub upload_panel: RwSignal<bool>,
+    /// Quick Look (Space) is open on the active pane's selection.
+    pub quicklook: RwSignal<bool>,
     pub upload_dest: RwSignal<Option<String>>,
     pub upload_input: NodeRef<html::Input>,
     /// Paths being dragged from inside the app.
@@ -165,6 +314,10 @@ pub struct AppState {
     /// Folder listings for the column view, shared by both panes.
     pub listings: RwSignal<HashMap<String, Col>>,
     listings_gen: StoredValue<u32>,
+    /// Trash contents, loaded while a pane shows the Trash.
+    pub trash: RwSignal<Option<Result<Vec<TrashItem>, String>>>,
+    /// Trash ids the message bar's Undo button puts back.
+    pub undo: RwSignal<Option<Vec<String>>>,
 }
 
 impl AppState {
@@ -172,6 +325,8 @@ impl AppState {
         let prefs: Option<Prefs> = storage()
             .and_then(|s| s.get_item(PREFS_KEY).ok().flatten())
             .and_then(|raw| serde_json::from_str(&raw).ok());
+        let parallel = prefs.as_ref().and_then(|p| p.parallel);
+        let col_width = prefs.as_ref().and_then(|p| p.col_width).unwrap_or(COL_WIDTH_DEFAULT);
         let (view, zoom, hidden, previews, places, sort) = match prefs {
             Some(p) => (p.view, p.zoom, p.hidden, p.previews, p.places, (p.sort, p.asc)),
             None => (ViewMode::Icons, 64, false, true, true, (SortKey::Name, true)),
@@ -185,6 +340,9 @@ impl AppState {
             sort: RwSignal::new(sort),
             show_hidden: RwSignal::new(hidden),
             previews: RwSignal::new(previews),
+            parallel: RwSignal::new(parallel.map(|n| n.clamp(1, MAX_PARALLEL))),
+            col_width: RwSignal::new(col_width.clamp(COL_WIDTH_MIN, COL_WIDTH_MAX)),
+            col_widths: RwSignal::new(HashMap::new()),
             places_open: RwSignal::new(places),
             info: RwSignal::new(None),
             clip: RwSignal::new(None),
@@ -194,12 +352,16 @@ impl AppState {
             renaming: RwSignal::new(None),
             message: RwSignal::new(None),
             upload: RwSignal::new(None),
+            upload_panel: RwSignal::new(false),
+            quicklook: RwSignal::new(false),
             upload_dest: RwSignal::new(None),
             upload_input: NodeRef::new(),
             dragging: RwSignal::new(None),
             drop_target: RwSignal::new(None),
             listings: RwSignal::new(HashMap::new()),
             listings_gen: StoredValue::new(0),
+            trash: RwSignal::new(None),
+            undo: RwSignal::new(None),
         }
     }
 
@@ -214,14 +376,56 @@ impl AppState {
             places: self.places_open.get(),
             sort,
             asc,
+            parallel: self.parallel.get(),
+            col_width: Some(self.col_width.get()).filter(|w| *w != COL_WIDTH_DEFAULT),
         };
         if let (Some(s), Ok(raw)) = (storage(), serde_json::to_string(&prefs)) {
             let _ = s.set_item(PREFS_KEY, &raw);
         }
     }
 
+    /// Width of the column showing `folder` (tracked).
+    pub fn column_width(&self, folder: &str) -> u32 {
+        self.col_widths.with(|m| m.get(folder).copied()).unwrap_or_else(|| self.col_width.get())
+    }
+
+    /// Resize one column, or (with `all`) every column, forgetting widths
+    /// set on single columns.
+    pub fn set_column_width(&self, folder: &str, width: u32, all: bool) {
+        let width = width.clamp(COL_WIDTH_MIN, COL_WIDTH_MAX);
+        if all {
+            self.col_width.set(width);
+            if self.col_widths.with_untracked(|m| !m.is_empty()) {
+                self.col_widths.set(HashMap::new());
+            }
+        } else if self.col_widths.with_untracked(|m| m.get(folder) != Some(&width)) {
+            self.col_widths.update(|m| {
+                m.insert(folder.to_string(), width);
+            });
+        }
+    }
+
+    /// The server's default for parallel uploads.
+    pub fn default_parallel(&self) -> u32 {
+        self.info.with(|i| i.as_ref().map(|i| i.upload_parallel).filter(|n| *n > 0).unwrap_or(3))
+    }
+
+    /// Files to upload at the same time (tracked).
+    pub fn upload_parallel(&self) -> u32 {
+        self.parallel.get().unwrap_or_else(|| self.default_parallel()).clamp(1, MAX_PARALLEL)
+    }
+
     pub fn read_only(&self) -> bool {
         self.info.with_untracked(|i| i.as_ref().map(|i| i.read_only).unwrap_or(false))
+    }
+
+    /// Whether deleting moves items to the Trash.
+    pub fn trash_enabled(&self) -> bool {
+        self.info.with_untracked(|i| i.as_ref().is_some_and(|i| i.trash))
+    }
+
+    pub fn in_trash(&self, i: usize) -> bool {
+        self.panes[i].path.with_untracked(|p| p == TRASH)
     }
 
     pub fn active_index(&self) -> usize {
@@ -232,19 +436,31 @@ impl AppState {
 
     pub fn notify(&self, kind: MsgKind, text: impl Into<String>) {
         let text = text.into();
+        self.undo.set(None);
         self.message.set(Some((kind, text.clone())));
         if kind == MsgKind::Info {
-            let msg = self.message;
-            set_timeout(
-                move || {
-                    let still_same = msg.with_untracked(|m| m.as_ref().map(|(_, t)| *t == text).unwrap_or(false));
-                    if still_same {
-                        msg.set(None);
-                    }
-                },
-                Duration::from_secs(4),
-            );
+            self.hide_message_later(text, Duration::from_secs(4));
         }
+    }
+
+    /// Hide message `text` after `delay`, unless another replaced it. One
+    /// with an Undo button stays a while longer.
+    fn hide_message_later(&self, text: String, delay: Duration) {
+        let st = *self;
+        set_timeout(
+            move || {
+                let still_same = st.message.with_untracked(|m| m.as_ref().is_some_and(|(_, t)| *t == text));
+                if !still_same {
+                    return;
+                }
+                if st.undo.with_untracked(|u| u.is_some()) && delay < Duration::from_secs(10) {
+                    st.hide_message_later(text, Duration::from_secs(10));
+                } else {
+                    st.message.set(None);
+                }
+            },
+            delay,
+        );
     }
 
     pub fn error(&self, text: impl Into<String>) {
@@ -281,6 +497,13 @@ impl AppState {
     pub fn load(&self, i: usize) {
         let p = self.panes[i];
         let path = p.path.get_untracked();
+        if path == TRASH {
+            p.entries.set(Vec::new());
+            p.error.set(None);
+            p.loaded.set(path);
+            self.load_trash();
+            return;
+        }
         let seq = p.load_seq.get_untracked().wrapping_add(1);
         p.load_seq.set(seq);
         p.loading.set(true);
@@ -309,6 +532,29 @@ impl AppState {
                     p.error.set(Some(e));
                 }
             }
+        });
+    }
+
+    /// Fetch the Trash contents (keeping the old ones on screen meanwhile).
+    pub fn load_trash(&self) {
+        let st = *self;
+        for p in self.panes {
+            if p.path.with_untracked(|x| x == TRASH) {
+                p.loading.set(true);
+            }
+        }
+        spawn_local(async move {
+            let res = api::trash_list().await;
+            for p in st.panes {
+                let _ = p.loading.try_set(false);
+            }
+            if let Ok(items) = &res {
+                // Forget selected items that are gone.
+                for p in st.panes.iter().filter(|p| p.path.with_untracked(|x| x == TRASH)) {
+                    p.selected.update(|s| s.retain(|id| items.iter().any(|t| &t.id == id)));
+                }
+            }
+            st.trash.set(Some(res));
         });
     }
 
@@ -389,7 +635,7 @@ impl AppState {
     /// Go to the parent folder and select the folder we came from.
     pub fn go_up(&self, i: usize) {
         let current = self.panes[i].path.get_untracked();
-        if current == "/" {
+        if current == "/" || current == TRASH {
             return;
         }
         self.navigate(i, vparent(&current));
@@ -426,7 +672,8 @@ impl AppState {
         if e.is_dir() {
             self.navigate(i, e.path.clone());
         } else {
-            let _ = window().open_with_url_and_target(&api::download_url(&e.path, true), "_blank");
+            // noopener: the opened file gets no handle on this page.
+            let _ = window().open_with_url_and_target_and_features(&api::download_url(&e.path, true), "_blank", "noopener");
         }
     }
 
@@ -464,7 +711,7 @@ impl AppState {
         let hash = window().location().hash().ok()?;
         let raw = hash.strip_prefix('#')?;
         let decoded: String = js_sys::decode_uri_component(raw).ok()?.into();
-        decoded.starts_with('/').then_some(decoded)
+        (decoded.starts_with('/') || decoded == TRASH).then_some(decoded)
     }
 
     /// Mirror the active pane's folder in the URL hash and page title.
@@ -473,7 +720,9 @@ impl AppState {
         if self.hash_path().as_deref() != Some(path) {
             let _ = window().location().replace(&format!("#{encoded}"));
         }
-        let name = if path == "/" {
+        let name = if path == TRASH {
+            "Trash".to_string()
+        } else if path == "/" {
             self.info.with_untracked(|i| i.as_ref().map(|i| i.name.clone())).unwrap_or_else(|| "Storage".into())
         } else {
             vname(path).to_string()
@@ -714,6 +963,9 @@ impl AppState {
     pub fn paste(&self, i: usize, dest: Option<String>) {
         let Some(clip) = self.clip.get_untracked() else { return };
         let dest = dest.unwrap_or_else(|| self.panes[i].path.get_untracked());
+        if dest == TRASH {
+            return;
+        }
         if clip.cut {
             self.clip.set(None);
         }
@@ -725,13 +977,19 @@ impl AppState {
         if self.read_only() || paths.is_empty() {
             return;
         }
+        if dest == TRASH {
+            if op == TransferOp::Move && self.trash_enabled() {
+                self.move_to_trash(paths);
+            }
+            return;
+        }
         let st = *self;
         let n = paths.len();
         spawn_local(async move {
             match api::transfer(paths, &dest, op).await {
                 Ok(rep) => {
                     let verb = if op == TransferOp::Copy { "Copied" } else { "Moved" };
-                    let place = if dest == "/" { "the root folder".to_string() } else { format!("“{}”", vname(&dest)) };
+                    let place = place_name(&dest);
                     st.report(&rep, Some(format!("{verb} {} to {place}", util::plural(n, "item", "items"))));
                 }
                 Err(e) => st.error(e),
@@ -740,14 +998,89 @@ impl AppState {
         });
     }
 
-    pub fn ask_delete(&self, i: usize) {
+    /// Delete key: move to the Trash, or ask first when there is no Trash
+    /// (or `permanent`, i.e. Shift+Delete). In the Trash, ask to delete the
+    /// selected items for good.
+    pub fn ask_delete(&self, i: usize, permanent: bool) {
         if self.read_only() {
             return;
         }
-        let paths = self.selected_paths(i);
-        if !paths.is_empty() {
-            self.dialog.set(Some(Dialog::ConfirmDelete(paths)));
+        if self.in_trash(i) {
+            let ids: Vec<String> = self.panes[i].selected.get_untracked().into_iter().collect();
+            if !ids.is_empty() {
+                self.dialog.set(Some(Dialog::ConfirmPurge(ids)));
+            }
+            return;
         }
+        let paths = self.selected_paths(i);
+        if paths.is_empty() {
+            return;
+        }
+        if permanent || !self.trash_enabled() {
+            self.dialog.set(Some(Dialog::ConfirmDelete(paths)));
+        } else {
+            self.move_to_trash(paths);
+        }
+    }
+
+    pub fn move_to_trash(&self, paths: Vec<String>) {
+        let st = *self;
+        spawn_local(async move {
+            match api::trash(paths).await {
+                Ok(rep) => {
+                    let n = rep.done as usize;
+                    st.report(&rep, Some(format!("Moved {} to the Trash", util::plural(n, "item", "items"))));
+                    if rep.errors.is_empty() && n > 0 {
+                        st.undo.set(Some(rep.ids));
+                    }
+                }
+                Err(e) => st.error(e),
+            }
+            st.refresh_all();
+        });
+    }
+
+    /// Put Trash items back where they came from.
+    pub fn restore(&self, ids: Vec<String>) {
+        if ids.is_empty() {
+            return;
+        }
+        let st = *self;
+        spawn_local(async move {
+            match api::trash_restore(ids).await {
+                Ok(rep) => {
+                    let msg = match rep.ids.as_slice() {
+                        [one] => format!("Restored “{}” to {}", vname(one), place_name(&vparent(one))),
+                        _ => format!("Restored {}", util::plural(rep.done as usize, "item", "items")),
+                    };
+                    st.report(&rep, Some(msg));
+                }
+                Err(e) => st.error(e),
+            }
+            st.refresh_all();
+        });
+    }
+
+    pub fn purge(&self, ids: Vec<String>) {
+        let st = *self;
+        spawn_local(async move {
+            match api::trash_purge(ids).await {
+                Ok(rep) => st.report(&rep, Some(format!("Deleted {}", util::plural(rep.done as usize, "item", "items")))),
+                Err(e) => st.error(e),
+            }
+            st.refresh_all();
+        });
+    }
+
+    pub fn empty_trash(&self) {
+        let st = *self;
+        spawn_local(async move {
+            match api::trash_empty().await {
+                Ok(rep) => st.report(&rep, Some("Emptied the Trash".into())),
+                Err(e) => st.error(e),
+            }
+            st.refresh_all();
+        });
     }
 
     pub fn delete(&self, paths: Vec<String>) {
@@ -771,6 +1104,9 @@ impl AppState {
     }
 
     fn create(&self, i: usize, name: String, folder: bool) {
+        if self.in_trash(i) {
+            return;
+        }
         let st = *self;
         let dir = self.panes[i].path.get_untracked();
         spawn_local(async move {
@@ -812,17 +1148,20 @@ impl AppState {
         });
     }
 
-    pub fn pick_upload(&self, i: usize) {
-        if self.read_only() {
+    /// Open the browser's picker for files, or for a whole folder.
+    pub fn pick_upload(&self, i: usize, folder: bool) {
+        if self.read_only() || self.in_trash(i) {
             return;
         }
         self.upload_dest.set(Some(self.panes[i].path.get_untracked()));
         if let Some(input) = self.upload_input.get_untracked() {
+            input.set_webkitdirectory(folder);
             input.click();
         }
     }
 
-    pub fn upload(&self, dest: String, files: Vec<web_sys::File>) {
+    /// Upload files, each given with its path relative to `dest`.
+    pub fn upload(&self, dest: String, files: Vec<(String, web_sys::File)>) {
         if files.is_empty() {
             return;
         }
@@ -830,27 +1169,37 @@ impl AppState {
             self.error("This storage is read-only");
             return;
         }
-        let label = if files.len() == 1 { files[0].name() } else { format!("{} files", files.len()) };
-        let up = self.upload;
-        up.set(Some(Upload { label, progress: 0.0 }));
+        if dest == TRASH {
+            self.error("Files cannot be uploaded into the Trash");
+            return;
+        }
+        let list: Vec<UpFile> =
+            files.iter().map(|(rel, f)| UpFile { rel: rel.clone(), dest: dest.clone(), size: f.size() }).collect();
+        crate::upload::enqueue(&dest, files);
+        let n = list.len();
+        if self.upload.with_untracked(|u| u.is_some()) {
+            // Join the running upload; its workers pick these up.
+            self.upload.update(|u| {
+                if let Some(u) = u {
+                    u.append(list);
+                }
+            });
+            self.notify(MsgKind::Info, format!("Added {} to the running upload", util::plural(n, "file", "files")));
+            return;
+        }
+        self.upload.set(Some(Upload::new(list)));
         let st = *self;
         spawn_local(async move {
-            let res = api::upload(&dest, files, move |f| {
-                up.update(|u| {
-                    if let Some(u) = u {
-                        u.progress = f;
-                    }
-                })
-            })
-            .await;
-            up.set(None);
-            match res {
-                Ok(rep) => {
-                    let msg = format!("Uploaded {}", util::plural(rep.done as usize, "file", "files"));
-                    st.report(&rep, Some(msg));
-                }
-                Err(e) => st.error(e),
-            }
+            let crate::upload::Outcome { report, cancelled } = crate::upload::run(st).await;
+            st.upload.set(None);
+            st.upload_panel.set(false);
+            let done = report.done as usize;
+            let msg = match (done, cancelled) {
+                (0, 1..) => "Upload cancelled".to_string(),
+                (_, 0) => format!("Uploaded {}", util::plural(done, "file", "files")),
+                _ => format!("Uploaded {} · {cancelled} cancelled", util::plural(done, "file", "files")),
+            };
+            st.report(&report, Some(msg));
             st.refresh_all();
         });
     }
@@ -868,13 +1217,31 @@ impl AppState {
             self.transfer(paths, dest, op);
             return;
         }
-        let files = ev.data_transfer().and_then(|dt| dt.files()).map(|fl| util::file_list(&fl)).unwrap_or_default();
-        self.upload(dest, files);
+        let Some(dt) = ev.data_transfer() else { return };
+        // Folders can only be read through entries; fall back to the plain
+        // file list in browsers without them.
+        let entries = util::dropped_entries(&dt);
+        if entries.is_empty() {
+            let files = dt.files().map(|fl| util::upload_items(&fl)).unwrap_or_default();
+            self.upload(dest, files);
+            return;
+        }
+        let st = *self;
+        spawn_local(async move {
+            match util::read_entries(entries).await {
+                Ok(files) if files.is_empty() => st.error("Nothing to upload: the dropped folders are empty"),
+                Ok(files) => st.upload(dest, files),
+                Err(e) => st.error(e),
+            }
+        });
     }
 
     // -- search ----------------------------------------------------------------
 
     pub fn open_search(&self, i: usize) {
+        if self.in_trash(i) {
+            return;
+        }
         let p = self.panes[i];
         if p.search.with_untracked(|s| s.is_none()) {
             p.search.set(Some(String::new()));
@@ -882,6 +1249,9 @@ impl AppState {
     }
 
     pub fn run_search(&self, i: usize) {
+        if self.in_trash(i) {
+            return;
+        }
         let p = self.panes[i];
         let q = p.search.get_untracked().unwrap_or_default();
         if q.trim().is_empty() {
@@ -919,6 +1289,15 @@ impl AppState {
             ZOOM_STEPS.iter().rev().copied().find(|s| *s < z).unwrap_or(32)
         };
         self.zoom.set(next);
+    }
+}
+
+/// "the root folder" or "“name”", for messages.
+pub fn place_name(dir: &str) -> String {
+    if dir == "/" {
+        "the root folder".into()
+    } else {
+        format!("“{}”", vname(dir))
     }
 }
 

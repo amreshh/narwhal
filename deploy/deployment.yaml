@@ -51,6 +51,11 @@ spec:
             # When empty the sidebar lists the top-level folders.
             - name: NARWHAL_PLACES
               value: ""
+            # Host names to answer to (your ingress host), e.g. "files.example.com".
+            # Requests for any other host get 403, which blocks DNS rebinding.
+            # Empty = any host.
+            - name: NARWHAL_ALLOWED_HOSTS
+              value: ""
             - name: RUST_LOG
               value: info,tower_http=info
           volumeMounts:

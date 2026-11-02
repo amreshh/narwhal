@@ -62,6 +62,15 @@ pub struct Info {
     pub read_only: bool,
     pub disk: Option<DiskInfo>,
     pub places: Vec<Place>,
+    /// Deleting moves items to the Trash (instead of removing them).
+    #[serde(default)]
+    pub trash: bool,
+    /// Number of items in the Trash.
+    #[serde(default)]
+    pub trash_items: u32,
+    /// Default number of files uploaded at the same time.
+    #[serde(default)]
+    pub upload_parallel: u32,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -102,6 +111,25 @@ pub struct TransferReq {
 pub struct OpReport {
     pub done: u32,
     pub errors: Vec<String>,
+    /// What the operation produced, where useful: Trash ids for a move to
+    /// the Trash, restored paths for a restore.
+    #[serde(default)]
+    pub ids: Vec<String>,
+}
+
+/// One item in the Trash.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct TrashItem {
+    pub id: String,
+    /// The item as it is now, with its original name and path.
+    pub entry: Entry,
+    /// When it was deleted, seconds since the Unix epoch.
+    pub deleted: i64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct TrashReq {
+    pub ids: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default)]

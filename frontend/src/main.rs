@@ -1,8 +1,12 @@
 mod api;
 mod columns;
 mod icons;
+mod office;
+mod quicklook;
 mod state;
+mod trash;
 mod ui;
+mod upload;
 mod util;
 
 fn main() {

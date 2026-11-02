@@ -13,5 +13,5 @@ resources:
 #   kubectl kustomize deploy | kubectl apply -f -   (or: kubectl apply -k deploy)
 images:
   - name: narwhal
-    newName: ghcr.io/your-org/narwhal
-    newTag: "0.1.0"
+    newName: ghcr.io/amreshh/narwhal
+    newTag: latest

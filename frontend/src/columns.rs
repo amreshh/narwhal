@@ -5,14 +5,20 @@
 //! one folder is selected, its contents appear as one more column on the
 //! right; if exactly one file is selected, a preview panel does. Clicking an
 //! item in any column makes that column current and selects the item.
+//!
+//! Columns are resizable by their right edge, like in Finder: drag to
+//! resize one column, Alt+drag to resize all, double-click to fit the
+//! longest name.
 
 use crate::{
     api, icons,
+    office::OfficePreview,
     state::*,
     ui::{use_st, RenameBox},
-    util::{self, format_date, format_size, size_text, type_label},
+    util::{self, format_date, format_size, size_text, type_label, PreviewKind},
 };
-use leptos::{ev, html, prelude::*};
+use leptos::{ev, html, prelude::*, task::spawn_local};
+use wasm_bindgen::JsCast;
 use narwhal_shared::Entry;
 
 #[component]
@@ -172,12 +178,88 @@ fn Column(idx: usize, folder: String) -> impl IntoView {
             .into_any(),
     };
 
+    let col = NodeRef::<html::Div>::new();
     view! {
-        <div class="column" class:current=is_current class:droptarget=is_drop
+        <div class="column" class:current=is_current class:droptarget=is_drop node_ref=col
             role="group" aria-label=folder.clone()
+            style=move || f.with_value(|f| format!("--colw:{}px", st.column_width(f)))
             on:click=on_click on:contextmenu=on_menu on:dragover=on_dragover on:drop=on_drop>
             {rows}
         </div>
+        <ColumnSplitter folder=f col=col/>
+    }
+}
+
+/// The grip on a column's right edge.
+#[component]
+fn ColumnSplitter(folder: StoredValue<String>, col: NodeRef<html::Div>) -> impl IntoView {
+    let st = use_st();
+    // While dragging: (pointer x at the start, width at the start, all columns).
+    let drag = StoredValue::new(None::<(f64, f64, bool)>);
+    let dragging = RwSignal::new(false);
+
+    let on_down = move |ev: ev::PointerEvent| {
+        if ev.button() != 0 {
+            return;
+        }
+        ev.prevent_default();
+        ev.stop_propagation();
+        let width = col.get_untracked().map(|c| c.get_bounding_client_rect().width()).unwrap_or(0.0);
+        drag.set_value(Some((ev.client_x() as f64, width, ev.alt_key())));
+        dragging.set(true);
+        if let Some(el) = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) {
+            let _ = el.set_pointer_capture(ev.pointer_id());
+        }
+    };
+    let on_move = move |ev: ev::PointerEvent| {
+        let Some((x0, w0, all)) = drag.get_value() else { return };
+        let width = (w0 + ev.client_x() as f64 - x0).round().max(0.0) as u32;
+        folder.with_value(|f| st.set_column_width(f, width, all));
+    };
+    let on_up = move |ev: ev::PointerEvent| {
+        if drag.get_value().is_some() {
+            drag.set_value(None);
+            dragging.set(false);
+            if let Some(el) = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) {
+                let _ = el.release_pointer_capture(ev.pointer_id());
+            }
+        }
+    };
+    // Fit the longest name: briefly let the column take its natural width.
+    let on_dbl = move |ev: ev::MouseEvent| {
+        ev.stop_propagation();
+        let Some(c) = col.get_untracked() else { return };
+        let style = web_sys::HtmlElement::style(&c);
+        let _ = style.set_property("width", "max-content");
+        let natural = c.get_bounding_client_rect().width();
+        let _ = style.remove_property("width");
+        // Room for a vertical scrollbar, if the column has one.
+        let scrollbar = (c.offset_width() - c.client_width() - 1).max(0) as f64;
+        folder.with_value(|f| st.set_column_width(f, (natural + scrollbar).ceil() as u32 + 2, ev.alt_key()));
+    };
+    // Keyboard: arrows resize by 16px (Alt: all columns).
+    let on_key = move |ev: ev::KeyboardEvent| {
+        let step: i32 = match ev.key().as_str() {
+            "ArrowLeft" => -16,
+            "ArrowRight" => 16,
+            _ => return,
+        };
+        ev.prevent_default();
+        ev.stop_propagation();
+        folder.with_value(|f| {
+            let w = untrack(|| st.column_width(f)) as i32 + step;
+            st.set_column_width(f, w.max(0) as u32, ev.alt_key());
+        });
+    };
+
+    view! {
+        <div class="colsplit" class:dragging=move || dragging.get()
+            role="separator" aria-orientation="vertical" tabindex="0"
+            aria-valuenow=move || folder.with_value(|f| st.column_width(f).to_string())
+            title="Drag to resize · Alt+drag: all columns · Double-click: fit names"
+            on:pointerdown=on_down on:pointermove=on_move on:pointerup=on_up on:pointercancel=on_up
+            on:click=|ev: ev::MouseEvent| ev.stop_propagation()
+            on:dblclick=on_dbl on:keydown=on_key></div>
     }
 }
 
@@ -288,15 +370,36 @@ fn ColumnRow(
     }
 }
 
-/// Details of the selected file, shown as the last column.
+/// How much of a text file the preview panel reads.
+const TEXT_PREVIEW_BYTES: u64 = 64 * 1024;
+
+/// Details of the selected file, shown as the last column, with its
+/// contents for the kinds the browser can show (images, media, PDF, text).
 #[component]
 fn FilePreview(idx: usize, entry: Entry) -> impl IntoView {
     let st = use_st();
-    let thumb = (util::is_thumbnailable(&entry) && st.previews.get_untracked())
-        .then(|| api::download_url(&entry.path, true));
-    let big = match thumb {
-        Some(url) => view! { <img src=url alt="" draggable="false"/> }.into_any(),
-        None => view! { <span class="fi-wrap" inner_html=icons::file_icon(&entry)></span> }.into_any(),
+    let kind = util::preview_kind(&entry).filter(|_| st.previews.get_untracked());
+    let url = api::download_url(&entry.path, true);
+    let icon = || view! { <span class="fi-wrap" inner_html=icons::file_icon(&entry)></span> };
+    let wide = matches!(kind, Some(PreviewKind::Video | PreviewKind::Pdf | PreviewKind::Text | PreviewKind::Office));
+    let big = match kind {
+        Some(PreviewKind::Image) => view! { <div class="big"><img src=url alt="" draggable="false"/></div> }.into_any(),
+        Some(PreviewKind::Video) => view! {
+            <div class="big media"><video src=url controls preload="metadata"></video></div>
+        }
+        .into_any(),
+        Some(PreviewKind::Audio) => view! {
+            <div class="big">{icon()}</div>
+            <audio class="media" src=url controls preload="metadata"></audio>
+        }
+        .into_any(),
+        Some(PreviewKind::Pdf) => view! {
+            <div class="big media"><iframe class="pdf" src=url title="PDF preview"></iframe></div>
+        }
+        .into_any(),
+        Some(PreviewKind::Text) => view! { <TextPreview entry=entry.clone() limit=TEXT_PREVIEW_BYTES/> }.into_any(),
+        Some(PreviewKind::Office) => view! { <div class="obox"><OfficePreview entry=entry.clone()/></div> }.into_any(),
+        None => view! { <div class="big">{icon()}</div> }.into_any(),
     };
     let size = format!("{} ({} bytes)", format_size(entry.size), entry.size);
     let modified = entry.modified.map(format_date).unwrap_or_else(|| "Unknown".into());
@@ -305,10 +408,10 @@ fn FilePreview(idx: usize, entry: Entry) -> impl IntoView {
     let dl_entry = entry.clone();
 
     view! {
-        <aside class="preview" aria-label="Preview"
+        <aside class="preview" class:wide=wide aria-label="Preview"
             on:click=|ev: ev::MouseEvent| ev.stop_propagation()
             on:contextmenu=|ev: ev::MouseEvent| ev.stop_propagation()>
-            <div class="big">{big}</div>
+            {big}
             <h3>{entry.name.clone()}</h3>
             <div class="muted">{type_label(&entry)}{" — "}{size_text(&entry)}</div>
             <dl>
@@ -325,5 +428,33 @@ fn FilePreview(idx: usize, entry: Entry) -> impl IntoView {
                 </button>
             </div>
         </aside>
+    }
+}
+
+/// The first `limit` bytes of a text file, read with a range request.
+#[component]
+pub(crate) fn TextPreview(entry: Entry, limit: u64) -> impl IntoView {
+    // None while loading; Some(Err) for binary or unreadable files.
+    let text = RwSignal::new(None::<Result<String, String>>);
+    if entry.size == 0 {
+        text.set(Some(Ok(String::new())));
+    } else {
+        let path = entry.path.clone();
+        spawn_local(async move {
+            let res = api::head_bytes(&path, limit)
+                .await
+                .and_then(|b| util::preview_text(&b).ok_or_else(|| "Binary file — no text preview".into()));
+            let _ = text.try_set(Some(res));
+        });
+    }
+    let cut = entry.size > limit;
+    move || match text.get() {
+        None => view! { <pre class="textprev muted">"Loading…"</pre> }.into_any(),
+        Some(Err(e)) => view! { <div class="col-note">{e}</div> }.into_any(),
+        Some(Ok(t)) if t.is_empty() => view! { <div class="col-note">"Empty file"</div> }.into_any(),
+        Some(Ok(t)) => view! {
+            <pre class="textprev">{t}{cut.then_some("\n…")}</pre>
+        }
+        .into_any(),
     }
 }

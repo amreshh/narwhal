@@ -1,0 +1,167 @@
+name: container
+
+# dev            -> ghcr.io/<repo>:<short-sha>, :latest
+# push to main   -> next version (see below), ghcr.io/<repo>:1.2.3, :1.2, :1,
+#                   then git tag v1.2.3 + GitHub Release with generated notes
+# tag v1.2.3     -> ghcr.io/<repo>:1.2.3, :1.2, :1  (manual; tag must be on main)
+# tag v1.2.3-rc1 -> ghcr.io/<repo>:1.2.3-rc1 only
+# pull requests  -> build only, nothing pushed
+#
+# Version on main: bumps the patch of the latest vX.Y.Z tag. Put "#minor" or
+# "#major" in a commit message (e.g. the merge commit) to bump that instead.
+# With no tags yet, the first release uses the version in Cargo.toml.
+on:
+  push:
+    branches: [dev, main]
+    # Version-shaped tags only, so a stray tag like "vtest" never triggers a release.
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Never cancel a release halfway (image pushed but no tag/release yet).
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  version:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.next.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Work out next version
+        id: next
+        run: |
+          stable='^v[0-9]+\.[0-9]+\.[0-9]+$'
+          if git tag --points-at HEAD | grep -qE "$stable"; then
+            echo "HEAD is already released, nothing to do"
+            exit 0
+          fi
+
+          last=$(git tag -l 'v*' --sort=-v:refname | grep -E "$stable" | head -1 || true)
+          if [ -z "$last" ]; then
+            version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          else
+            IFS=. read -r major minor patch <<< "${last#v}"
+            log=$(git log "$last..HEAD" --format=%B)
+            if grep -q '#major' <<< "$log"; then
+              version="$((major + 1)).0.0"
+            elif grep -q '#minor' <<< "$log"; then
+              version="$major.$((minor + 1)).0"
+            else
+              version="$major.$minor.$((patch + 1))"
+            fi
+          fi
+
+          echo "Releasing v$version (previous: ${last:-none})"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  # Tests and lints: nothing is built or published unless they pass.
+  test:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup target add wasm32-unknown-unknown
+
+      # Caches ~/.cargo and target/ between runs, keyed on Cargo.lock and the toolchain.
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Tests
+        run: cargo test --locked -p narwhal-server -p narwhal-shared -p narwhal-office
+
+      - name: Lints
+        run: |
+          cargo clippy --locked -p narwhal-server -p narwhal-shared -p narwhal-office --all-targets -- -D warnings
+          cargo clippy --locked -p narwhal-frontend --target wasm32-unknown-unknown -- -D warnings
+
+  build:
+    needs: [version, test]
+    # Runs for dev/tags/PRs (version job skipped) and for main when there is something to release.
+    if: >-
+      !cancelled() && needs.version.result != 'failure' && needs.test.result == 'success' &&
+      (github.ref != 'refs/heads/main' || needs.version.outputs.version != '')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Check release tag is on main
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Tag ${GITHUB_REF_NAME} points at a commit that is not on main"
+            exit 1
+          fi
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}
+          flavor: latest=false
+          # On main, semver tags come from the computed version; on tag pushes, from the tag.
+          tags: |
+            type=sha,prefix=,format=short,enable=${{ github.ref == 'refs/heads/dev' }}
+            type=semver,pattern={{version}},value=${{ needs.version.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.version.outputs.version }}
+            type=semver,pattern={{major}},value=${{ needs.version.outputs.version }}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/dev' }}
+            type=ref,event=pr
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  release:
+    needs: [version, build]
+    if: github.ref == 'refs/heads/main' && needs.version.outputs.version != ''
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      # Tags created with GITHUB_TOKEN don't trigger workflows, so this won't rebuild.
+      - name: Tag and create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: v${{ needs.version.outputs.version }}
+        run: |
+          gh release create "$VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$VERSION" \
+            --generate-notes

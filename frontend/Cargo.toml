@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 narwhal-shared = { path = "../shared" }
+narwhal-office = { path = "../office" }
 leptos = { version = "0.8", features = ["csr"] }
 gloo-net = { version = "0.6", default-features = false, features = ["http", "json"] }
 serde = { version = "1", features = ["derive"] }
@@ -14,6 +15,8 @@ wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 console_error_panic_hook = "0.1"
+sha2 = "0.10"
+futures = { version = "0.3", default-features = false, features = ["std", "async-await"] }
 
 [dependencies.web-sys]
 version = "0.3"
@@ -21,20 +24,27 @@ features = [
   "Blob",
   "Clipboard",
   "CssStyleDeclaration",
+  "BeforeUnloadEvent",
   "DataTransfer",
+  "DataTransferItem",
+  "DataTransferItemList",
   "Document",
   "DomRect",
   "DragEvent",
   "Element",
   "File",
   "FileList",
-  "FormData",
+  "FileSystemDirectoryEntry",
+  "FileSystemDirectoryReader",
+  "FileSystemEntry",
+  "FileSystemFileEntry",
   "HtmlAnchorElement",
   "HtmlElement",
   "HtmlInputElement",
   "KeyboardEvent",
   "Location",
   "MouseEvent",
+  "PointerEvent",
   "Navigator",
   "ProgressEvent",
   "ScrollIntoViewOptions",

@@ -20,6 +20,22 @@ pub fn format_size(bytes: u64) -> String {
     }
 }
 
+/// "3.2 MiB/s".
+pub fn format_speed(bytes_per_sec: f64) -> String {
+    format!("{}/s", format_size(bytes_per_sec.max(0.0) as u64))
+}
+
+/// Rough time left: "a few seconds", "40 s", "3 min", "1 h 5 min".
+pub fn format_eta(secs: f64) -> String {
+    let s = secs.round() as u64;
+    match s {
+        0..=4 => "a few seconds".into(),
+        5..=59 => format!("{s} s"),
+        60..=3599 => format!("{} min", (s + 30) / 60),
+        _ => format!("{} h {} min", s / 3600, (s % 3600) / 60),
+    }
+}
+
 pub fn format_items(n: u32) -> String {
     if n == 1 {
         "1 item".into()
@@ -105,9 +121,11 @@ pub fn category(e: &Entry) -> Cat {
         | "nix" => Cat::Code,
         "txt" | "md" | "log" | "csv" | "tsv" | "ini" | "conf" | "cfg" | "env" | "rst" | "org" => Cat::Text,
         "pdf" => Cat::Pdf,
-        "doc" | "docx" | "odt" | "rtf" | "pages" | "epub" => Cat::Document,
-        "xls" | "xlsx" | "ods" | "numbers" => Cat::Spreadsheet,
-        "ppt" | "pptx" | "odp" | "key" => Cat::Presentation,
+        "doc" | "docx" | "docm" | "dot" | "dotx" | "dotm" | "odt" | "ott" | "rtf" | "pages" | "epub" => Cat::Document,
+        "xls" | "xlsx" | "xlsm" | "xlt" | "xltx" | "xltm" | "ods" | "ots" | "numbers" => Cat::Spreadsheet,
+        "ppt" | "pptx" | "pptm" | "pps" | "ppsx" | "ppsm" | "pot" | "potx" | "potm" | "odp" | "otp" | "key" => {
+            Cat::Presentation
+        }
         "ttf" | "otf" | "woff" | "woff2" => Cat::Font,
         "iso" | "img" | "qcow2" | "vmdk" | "vdi" | "dmg" => Cat::DiskImage,
         _ => Cat::Other,
@@ -170,6 +188,70 @@ pub fn is_thumbnailable(e: &Entry) -> bool {
         && e.size <= 25 * 1024 * 1024
 }
 
+/// How the preview panel can show a file's contents.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PreviewKind {
+    Image,
+    Video,
+    Audio,
+    Pdf,
+    Text,
+    /// Word, Excel, PowerPoint and OpenDocument files (their text and cells).
+    Office,
+}
+
+/// Files without an extension that are almost always plain text.
+const TEXT_NAMES: &[&str] = &[
+    "dockerfile", "containerfile", "makefile", "justfile", "readme", "license", "licence", "copying",
+    "authors", "changelog", "notice", "todo", "procfile", "gemfile", "rakefile", "vagrantfile",
+    ".gitignore", ".gitattributes", ".gitmodules", ".dockerignore", ".editorconfig", ".env",
+    ".bashrc", ".zshrc", ".profile", ".bash_profile", ".npmrc", ".prettierrc", ".eslintrc",
+];
+
+/// The preview a file gets, if the browser can show it. Media and PDFs are
+/// limited to formats browsers play natively; text is read in part, so any
+/// size works.
+pub fn preview_kind(e: &Entry) -> Option<PreviewKind> {
+    if e.kind != EntryKind::File {
+        return None;
+    }
+    if is_thumbnailable(e) {
+        return Some(PreviewKind::Image);
+    }
+    let x = ext(&e.name);
+    match x.as_str() {
+        "mp4" | "m4v" | "webm" | "mov" | "ogv" => return Some(PreviewKind::Video),
+        "mp3" | "ogg" | "oga" | "opus" | "wav" | "m4a" | "aac" | "flac" => return Some(PreviewKind::Audio),
+        "pdf" => return Some(PreviewKind::Pdf),
+        x if narwhal_office::handles(x) => return Some(PreviewKind::Office),
+        _ => {}
+    }
+    let name = e.name.to_lowercase();
+    let texty = matches!(category(e), Cat::Code | Cat::Text)
+        || TEXT_NAMES.contains(&name.as_str())
+        || matches!(
+            x.as_str(),
+            "jsonc" | "json5" | "ndjson" | "jsonl" | "lock" | "properties" | "gradle" | "cmake" | "mk"
+                | "patch" | "diff" | "srt" | "vtt" | "tex" | "bib" | "graphql" | "proto" | "hcl"
+                | "service" | "desktop" | "mjs" | "cjs" | "less" | "sass" | "ex" | "exs" | "erl"
+                | "hs" | "ml" | "scala" | "clj" | "dart" | "zig" | "r" | "pl" | "ps1" | "bat"
+                | "fish" | "vim" | "el" | "gitignore" | "adoc" | "htm"
+        );
+    texty.then_some(PreviewKind::Text)
+}
+
+/// Turn the first bytes of a file into preview text, or `None` if it looks binary.
+pub fn preview_text(bytes: &[u8]) -> Option<String> {
+    if bytes.contains(&0) {
+        return None;
+    }
+    // The read may have stopped mid-character; drop a broken tail.
+    let s = String::from_utf8_lossy(bytes);
+    let s = s.trim_end_matches('\u{FFFD}');
+    let bad = s.chars().filter(|&c| c == '\u{FFFD}' || (c.is_control() && !c.is_whitespace())).count();
+    (bad * 20 <= s.chars().count().max(1)).then(|| s.to_string())
+}
+
 /// Size column text: item count for folders, bytes for files.
 pub fn size_text(e: &Entry) -> String {
     match e.kind {
@@ -220,6 +302,84 @@ pub fn natural_cmp(a: &str, b: &str) -> Ordering {
 
 pub fn file_list(fl: &web_sys::FileList) -> Vec<web_sys::File> {
     (0..fl.length()).filter_map(|i| fl.get(i)).collect()
+}
+
+/// Files from a file input, each with its path relative to the upload
+/// folder: just the name, or `folder/sub/name` when a folder was picked.
+pub fn upload_items(fl: &web_sys::FileList) -> Vec<(String, web_sys::File)> {
+    file_list(fl)
+        .into_iter()
+        .map(|f| {
+            let rel = js_sys::Reflect::get(&f, &"webkitRelativePath".into())
+                .ok()
+                .and_then(|v| v.as_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| f.name());
+            (rel, f)
+        })
+        .collect()
+}
+
+/// Entries of a drop, which may include folders. Must be called while the
+/// drop event is being handled: the browser clears the items afterwards.
+pub fn dropped_entries(dt: &web_sys::DataTransfer) -> Vec<web_sys::FileSystemEntry> {
+    let items = dt.items();
+    (0..items.length())
+        .filter_map(|i| items.get(i))
+        .filter(|it| it.kind() == "file")
+        .filter_map(|it| it.webkit_get_as_entry().ok().flatten())
+        .collect()
+}
+
+/// Walk dropped entries, descending into folders, and return every file
+/// with its relative path. Empty folders are skipped.
+pub async fn read_entries(
+    entries: Vec<web_sys::FileSystemEntry>,
+) -> Result<Vec<(String, web_sys::File)>, String> {
+    use js_sys::{Array, Promise};
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen_futures::JsFuture;
+    use web_sys::{FileSystemDirectoryEntry, FileSystemEntry, FileSystemFileEntry};
+
+    let fail = |e: wasm_bindgen::JsValue| {
+        let msg = js_sys::Reflect::get(&e, &"message".into()).ok().and_then(|m| m.as_string());
+        format!("Could not read the dropped items: {}", msg.unwrap_or_else(|| format!("{e:?}")))
+    };
+    let mut out = Vec::new();
+    let mut stack: Vec<(String, FileSystemEntry)> = entries.into_iter().map(|e| (e.name(), e)).collect();
+    while let Some((path, entry)) = stack.pop() {
+        if entry.is_directory() {
+            let reader = entry.unchecked_ref::<FileSystemDirectoryEntry>().create_reader();
+            // readEntries returns results in batches; an empty one means done.
+            loop {
+                let batch = JsFuture::from(Promise::new(&mut |resolve, reject| {
+                    if let Err(e) = reader.read_entries_with_callback_and_callback(&resolve, &reject) {
+                        let _ = reject.call1(&wasm_bindgen::JsValue::NULL, &e);
+                    }
+                }))
+                .await
+                .map_err(fail)?
+                .unchecked_into::<Array>();
+                if batch.length() == 0 {
+                    break;
+                }
+                for e in batch.iter() {
+                    let e: FileSystemEntry = e.unchecked_into();
+                    stack.push((format!("{path}/{}", e.name()), e));
+                }
+            }
+        } else if entry.is_file() {
+            let file_entry = entry.unchecked_ref::<FileSystemFileEntry>();
+            let file = JsFuture::from(Promise::new(&mut |resolve, reject| {
+                file_entry.file_with_callback_and_callback(&resolve, &reject)
+            }))
+            .await
+            .map_err(fail)?;
+            out.push((path, file.unchecked_into()));
+        }
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(out)
 }
 
 /// UTF-16 length of the name without its extension (for selecting it in an input).
