@@ -289,13 +289,13 @@ mod tests {
 
 /// Prints what every file in `$OFFICE_SAMPLES` gives, for checking real
 /// documents by eye: `OFFICE_SAMPLES=dir cargo test -p narwhal-office
-/// samples -- --ignored --nocapture`.
+/// samples -- --ignored --nocapture`. Subfolders are skipped.
 #[cfg(test)]
 #[test]
 #[ignore]
 fn samples() {
     let dir = std::env::var("OFFICE_SAMPLES").expect("set OFFICE_SAMPLES to a folder of documents");
-    let mut paths: Vec<_> = std::fs::read_dir(dir).unwrap().flatten().map(|e| e.path()).collect();
+    let mut paths: Vec<_> = std::fs::read_dir(dir).unwrap().flatten().map(|e| e.path()).filter(|p| p.is_file()).collect();
     paths.sort();
     for path in paths {
         let data = std::fs::read(&path).unwrap();
