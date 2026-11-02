@@ -5,7 +5,7 @@ like KDE's Dolphin. The UI is Rust compiled to WebAssembly
 ([Leptos](https://leptos.dev)); the backend is a small [Axum](https://github.com/tokio-rs/axum)
 server that confines every operation to one root directory (your PVC).
 
-One container, one port, ~30 MB image, ~350 KB of gzipped WASM.
+One container, one port, ~30 MB image, ~650 KB of gzipped WASM.
 
 ## Features
 
@@ -20,7 +20,12 @@ One container, one port, ~30 MB image, ~350 KB of gzipped WASM.
   - drag a column's edge to resize it (Alt+drag: all columns, double-click: fit the names)
   - drag items onto any folder in any column; right-click works in every column
 - **Quick Look** (Space): a large preview of the selected item — images, video, audio, PDFs,
-  text — that follows the arrow keys; Space or Esc closes it
+  text, office documents — that follows the arrow keys; Space or Esc closes it
+- **Office previews** in the column view and Quick Look: the text of Word documents (doc,
+  docx, odt) with headings, lists and tables; the cells of spreadsheets (xls, xlsx, ods) with
+  a tab per sheet; the text of each slide of presentations (ppt, pptx, odp). Documents are read
+  in the browser, never on the server, and only their beginning is shown (500 rows × 40
+  columns of a sheet)
 - **Split view** (F3) with independent history per pane; drag between panes to move, hold Ctrl to copy
 - **Selection** like a desktop: click, Ctrl+click, Shift+click, arrow keys, Ctrl+A
 - **Trash**: Delete moves items to the Trash (with Undo); restore them to where they were, delete
@@ -31,7 +36,7 @@ One container, one port, ~30 MB image, ~350 KB of gzipped WASM.
   appears once it arrived intact; interrupted, stalled or damaged files are retried automatically
   (also after the network drops for a while). Several files go up in parallel (adjustable), and
   files added during an upload join its queue.
-  Click the upload bar for each file's state, the speed and time left
+  Click the upload bar for each file's state, the speed and time left; any file (or all) can be cancelled there
 - **Filter bar** (Ctrl+I) and **recursive name search** (Ctrl+F)
 - **Properties** dialog with recursive folder size and permissions
 - Hidden files toggle, natural sorting (`file2` before `file10`), light/dark theme from the OS,
@@ -45,6 +50,7 @@ shared/     serde types used by both sides (Entry, Listing, requests…)
 server/     Axum API + static file serving         → binary `narwhal`
 frontend/   Leptos CSR app built with Trunk         → frontend/dist
               (src/columns.rs is the column view)
+office/     reads office documents for the previews (used by the frontend)
 deploy/     Kustomize manifests (namespace, PVC, Deployment, Service, Ingress)
 Dockerfile  multi-stage build → distroless runtime image
 ```
@@ -68,8 +74,10 @@ NARWHAL_ROOT=$HOME/some-folder NARWHAL_STATIC_DIR=frontend/dist cargo run -p nar
 For UI work with live reload, run the server as above and in another terminal
 `cd frontend && trunk serve` (port 8081; `/api` is proxied to 8080).
 
-Tests: `cargo test -p narwhal-server -p narwhal-shared` (path traversal, symlink escape,
-copy/move/rename/delete, search, naming).
+Tests: `cargo test -p narwhal-server -p narwhal-shared -p narwhal-office` (path traversal,
+symlink escape and races, copy/move/rename/delete, Trash, search, naming, document formats).
+To check the document readers on your own files:
+`OFFICE_SAMPLES=some/folder cargo test -p narwhal-office samples -- --ignored --nocapture`.
 
 ## Container image
 
@@ -136,7 +144,13 @@ With a ReadWriteOnce volume keep `replicas: 1` (strategy `Recreate`).
   delete with your login. Set `NARWHAL_ALLOWED_HOSTS` to your hostname to also
   refuse DNS-rebinding requests. Pages are sent with `X-Frame-Options: DENY`.
 - All paths are resolved against the root; `..` is rejected and symlinks that
-  point outside the root are refused.
+  point outside the root are refused. Folders are opened one name at a time and
+  every operation works on the opened folder, so swapping a folder for a symlink
+  while a request runs can't lead outside the root either.
+- The app's pages are sent with a strict `Content-Security-Policy` (only its own
+  scripts), `nosniff` and `Referrer-Policy: no-referrer`.
+- Invalid settings (e.g. `NARWHAL_READ_ONLY=ture`) stop the server at startup
+  instead of silently falling back to a default.
 - Files opened "in a new tab" are served with `Content-Security-Policy: sandbox`
   and `nosniff`, so an uploaded HTML or SVG file cannot run scripts against the app.
   PDFs are the exception (browser PDF viewers refuse sandboxed pages and isolate
@@ -169,7 +183,5 @@ All endpoints take and return JSON; paths are virtual (`/` = the root).
 
 ## Known limitations
 
-- Dropping whole *folders* from the desktop isn't supported yet (files are).
-- Deletes are permanent; there is no trash.
 - Thumbnails are the original images (lazy-loaded, ≤25 MB each), not server-side resized.
 - Downloading a folder as an archive isn't implemented.

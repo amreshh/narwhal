@@ -64,11 +64,32 @@ jobs:
           echo "Releasing v$version (previous: ${last:-none})"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
+  # Tests and lints: nothing is built or published unless they pass.
+  test:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup target add wasm32-unknown-unknown
+
+      - name: Tests
+        run: cargo test --locked -p narwhal-server -p narwhal-shared -p narwhal-office
+
+      - name: Lints
+        run: |
+          cargo clippy --locked -p narwhal-server -p narwhal-shared -p narwhal-office --all-targets -- -D warnings
+          cargo clippy --locked -p narwhal-frontend --target wasm32-unknown-unknown -- -D warnings
+
   build:
-    needs: version
+    needs: [version, test]
     # Runs for dev/tags/PRs (version job skipped) and for main when there is something to release.
     if: >-
-      !cancelled() && needs.version.result != 'failure' &&
+      !cancelled() && needs.version.result != 'failure' && needs.test.result == 'success' &&
       (github.ref != 'refs/heads/main' || needs.version.outputs.version != '')
     runs-on: ubuntu-24.04
     permissions:
