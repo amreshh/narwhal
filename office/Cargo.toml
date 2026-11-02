@@ -1,0 +1,11 @@
+[package]
+name = "narwhal-office"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Text and cell previews of office documents (docx, xlsx, pptx, odt, ods, odp, doc, xls, ppt)"
+
+[dependencies]
+# Unzipping Office Open XML and OpenDocument files, with a size limit.
+miniz_oxide = "0.9"
+quick-xml = "0.42"

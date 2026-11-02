@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["shared", "server", "frontend"]
+members = ["shared", "server", "frontend", "office"]
 
 [workspace.package]
 version = "0.1.0"

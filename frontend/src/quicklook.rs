@@ -6,6 +6,7 @@ use crate::{
     api,
     columns::TextPreview,
     icons,
+    office::OfficePreview,
     state::*,
     ui::use_st,
     util::{self, format_date, size_text, type_label, PreviewKind},
@@ -78,6 +79,10 @@ pub fn QuickLook() -> impl IntoView {
             Some(PreviewKind::Pdf) => view! { <iframe class="ql-pdf" src=url title="PDF preview"></iframe> }.into_any(),
             Some(PreviewKind::Text) => view! {
                 <div class="ql-text"><TextPreview entry=entry.clone() limit=TEXT_BYTES/></div>
+            }
+            .into_any(),
+            Some(PreviewKind::Office) => view! {
+                <div class="ql-office"><OfficePreview entry=entry.clone()/></div>
             }
             .into_any(),
             None => {

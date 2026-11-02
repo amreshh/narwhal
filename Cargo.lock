@@ -1150,6 +1150,7 @@ dependencies = [
  "gloo-net",
  "js-sys",
  "leptos",
+ "narwhal-office",
  "narwhal-shared",
  "serde",
  "serde_json",
@@ -1157,6 +1158,14 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "narwhal-office"
+version = "0.1.0"
+dependencies = [
+ "miniz_oxide",
+ "quick-xml",
 ]
 
 [[package]]
@@ -1324,6 +1333,15 @@ dependencies = [
  "quote",
  "syn 3.0.9",
  "version_check",
+]
+
+[[package]]
+name = "quick-xml"
+version = "0.42.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "41b1177fdf999d2321d3fb46ff47159d9c1fb9ad66a4879f8c50a0b504615e9b"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]

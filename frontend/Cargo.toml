@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 narwhal-shared = { path = "../shared" }
+narwhal-office = { path = "../office" }
 leptos = { version = "0.8", features = ["csr"] }
 gloo-net = { version = "0.6", default-features = false, features = ["http", "json"] }
 serde = { version = "1", features = ["derive"] }

@@ -526,6 +526,55 @@ kbd { font-family: var(--mono); font-size: 12px; }
 .urow.more { display: block; text-align: center; font-style: italic; }
 .zoom input { width: 110px; accent-color: var(--accent); vertical-align: middle; }
 
+/* ---------- office previews ---------- */
+.office { width: 100%; text-align: left; font-size: 13px; line-height: 1.5; }
+.onote { width: 100%; margin-top: 6px; color: var(--muted); font-size: 12px; font-style: italic; text-align: center; }
+.office .b { font-weight: 700; }
+.office .i { font-style: italic; }
+.office .u { text-decoration: underline; }
+.odoc { padding: 14px 18px; background: var(--view); border: 1px solid var(--border-soft); border-radius: 3px; overflow-wrap: anywhere; }
+.odoc p { margin: 0 0 7px; white-space: pre-wrap; }
+.odoc p:empty { height: 0.6em; }
+.odoc .oh { margin: 14px 0 7px; font-weight: 600; line-height: 1.3; }
+.odoc .oh:first-child { margin-top: 0; }
+.odoc .oh1 { font-size: 1.55em; }
+.odoc .oh2 { font-size: 1.3em; }
+.odoc .oh3 { font-size: 1.15em; }
+.odoc .oh4, .odoc .oh5, .odoc .oh6 { font-size: 1em; }
+.odoc .oli { position: relative; padding-left: calc(var(--lvl, 0) * 18px + 18px); }
+.odoc .oli::before { content: "•"; position: absolute; left: calc(var(--lvl, 0) * 18px + 5px); color: var(--muted); }
+.otable { margin: 4px 0 10px; border-collapse: collapse; font-size: 12px; }
+.otable td { padding: 3px 7px; border: 1px solid var(--border-soft); vertical-align: top; white-space: pre-wrap; }
+.otabs { display: flex; flex-wrap: wrap; gap: 3px; margin-bottom: 6px; }
+.otab {
+  appearance: none; padding: 3px 10px; color: inherit; font: inherit; font-size: 12px; cursor: pointer;
+  background: var(--btn); border: 1px solid var(--border-soft); border-radius: var(--radius);
+}
+.otab.on { background: var(--sel-bg); border-color: var(--sel-border); }
+.ogrid { max-height: 56vh; overflow: auto; background: var(--view); border: 1px solid var(--border-soft); border-radius: 3px; }
+.ogrid table { border-collapse: separate; border-spacing: 0; font-size: 12px; font-variant-numeric: tabular-nums; }
+.ogrid th, .ogrid td { padding: 2px 7px; border-right: 1px solid var(--border-soft); border-bottom: 1px solid var(--border-soft); white-space: nowrap; }
+.ogrid td { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+.ogrid td.num { text-align: right; }
+/* Column letters and row numbers stay in view while scrolling. */
+.ogrid th { position: sticky; background: var(--win); color: var(--muted); font-weight: normal; text-align: center; }
+.ogrid thead th { top: 0; z-index: 1; }
+.ogrid tbody th { left: 0; }
+.ogrid thead th:first-child { left: 0; z-index: 2; }
+.oslides { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.oslide {
+  display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 8px; padding: 10px 12px;
+  background: var(--view); border: 1px solid var(--border-soft); border-radius: 4px;
+}
+.onum { color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; }
+.otext p { margin: 0 0 3px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.otext .otitle { margin-bottom: 5px; font-size: 14px; font-weight: 600; }
+.preview .obox { width: 100%; flex: none; }
+.preview .obox .odoc, .preview .obox .oslides { max-height: 56vh; overflow: auto; }
+.ql-office { align-self: stretch; width: 100%; height: 100%; overflow: auto; padding: 16px; }
+.ql-office .odoc, .ql-office .oslides { max-width: 860px; margin: 0 auto; }
+.ql-office .ogrid { max-height: none; }
+
 /* ---------- small screens ---------- */
 @media (max-width: 760px) {
   .places { display: none; }

@@ -1,6 +1,7 @@
 mod api;
 mod columns;
 mod icons;
+mod office;
 mod quicklook;
 mod state;
 mod trash;

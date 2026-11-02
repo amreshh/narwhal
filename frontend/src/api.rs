@@ -126,6 +126,15 @@ pub async fn head_bytes(path: &str, n: u64) -> ApiResult<Vec<u8>> {
     Ok(bytes)
 }
 
+/// A whole file's content (for previews that need all of it).
+pub async fn file_bytes(path: &str) -> ApiResult<Vec<u8>> {
+    let resp = Request::get(&download_url(path, true)).send().await.map_err(|e| e.to_string())?;
+    if !resp.ok() {
+        return Err(format!("Could not read the file (HTTP {})", resp.status()));
+    }
+    resp.binary().await.map_err(|e| e.to_string())
+}
+
 /// Why sending a file failed.
 pub enum SendError {
     /// Worth another try: the connection broke, the server was briefly

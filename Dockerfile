@@ -27,6 +27,7 @@ RUN rustup target add wasm32-unknown-unknown \
 
 COPY Cargo.toml Cargo.lock ./
 COPY shared shared
+COPY office office
 COPY server server
 COPY frontend frontend
 

@@ -12,6 +12,7 @@
 
 use crate::{
     api, icons,
+    office::OfficePreview,
     state::*,
     ui::{use_st, RenameBox},
     util::{self, format_date, format_size, size_text, type_label, PreviewKind},
@@ -380,7 +381,7 @@ fn FilePreview(idx: usize, entry: Entry) -> impl IntoView {
     let kind = util::preview_kind(&entry).filter(|_| st.previews.get_untracked());
     let url = api::download_url(&entry.path, true);
     let icon = || view! { <span class="fi-wrap" inner_html=icons::file_icon(&entry)></span> };
-    let wide = matches!(kind, Some(PreviewKind::Video | PreviewKind::Pdf | PreviewKind::Text));
+    let wide = matches!(kind, Some(PreviewKind::Video | PreviewKind::Pdf | PreviewKind::Text | PreviewKind::Office));
     let big = match kind {
         Some(PreviewKind::Image) => view! { <div class="big"><img src=url alt="" draggable="false"/></div> }.into_any(),
         Some(PreviewKind::Video) => view! {
@@ -397,6 +398,7 @@ fn FilePreview(idx: usize, entry: Entry) -> impl IntoView {
         }
         .into_any(),
         Some(PreviewKind::Text) => view! { <TextPreview entry=entry.clone() limit=TEXT_PREVIEW_BYTES/> }.into_any(),
+        Some(PreviewKind::Office) => view! { <div class="obox"><OfficePreview entry=entry.clone()/></div> }.into_any(),
         None => view! { <div class="big">{icon()}</div> }.into_any(),
     };
     let size = format!("{} ({} bytes)", format_size(entry.size), entry.size);

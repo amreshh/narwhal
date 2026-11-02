@@ -121,9 +121,11 @@ pub fn category(e: &Entry) -> Cat {
         | "nix" => Cat::Code,
         "txt" | "md" | "log" | "csv" | "tsv" | "ini" | "conf" | "cfg" | "env" | "rst" | "org" => Cat::Text,
         "pdf" => Cat::Pdf,
-        "doc" | "docx" | "odt" | "rtf" | "pages" | "epub" => Cat::Document,
-        "xls" | "xlsx" | "ods" | "numbers" => Cat::Spreadsheet,
-        "ppt" | "pptx" | "odp" | "key" => Cat::Presentation,
+        "doc" | "docx" | "docm" | "dot" | "dotx" | "dotm" | "odt" | "ott" | "rtf" | "pages" | "epub" => Cat::Document,
+        "xls" | "xlsx" | "xlsm" | "xlt" | "xltx" | "xltm" | "ods" | "ots" | "numbers" => Cat::Spreadsheet,
+        "ppt" | "pptx" | "pptm" | "pps" | "ppsx" | "ppsm" | "pot" | "potx" | "potm" | "odp" | "otp" | "key" => {
+            Cat::Presentation
+        }
         "ttf" | "otf" | "woff" | "woff2" => Cat::Font,
         "iso" | "img" | "qcow2" | "vmdk" | "vdi" | "dmg" => Cat::DiskImage,
         _ => Cat::Other,
@@ -194,6 +196,8 @@ pub enum PreviewKind {
     Audio,
     Pdf,
     Text,
+    /// Word, Excel, PowerPoint and OpenDocument files (their text and cells).
+    Office,
 }
 
 /// Files without an extension that are almost always plain text.
@@ -219,6 +223,7 @@ pub fn preview_kind(e: &Entry) -> Option<PreviewKind> {
         "mp4" | "m4v" | "webm" | "mov" | "ogv" => return Some(PreviewKind::Video),
         "mp3" | "ogg" | "oga" | "opus" | "wav" | "m4a" | "aac" | "flac" => return Some(PreviewKind::Audio),
         "pdf" => return Some(PreviewKind::Pdf),
+        x if narwhal_office::handles(x) => return Some(PreviewKind::Office),
         _ => {}
     }
     let name = e.name.to_lowercase();
