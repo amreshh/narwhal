@@ -10,9 +10,9 @@ use crate::{
     api, icons,
     state::*,
     ui::{use_st, RenameBox},
-    util::{self, format_date, format_size, size_text, type_label},
+    util::{self, format_date, format_size, size_text, type_label, PreviewKind},
 };
-use leptos::{ev, html, prelude::*};
+use leptos::{ev, html, prelude::*, task::spawn_local};
 use narwhal_shared::Entry;
 
 #[component]
@@ -288,15 +288,35 @@ fn ColumnRow(
     }
 }
 
-/// Details of the selected file, shown as the last column.
+/// How much of a text file the preview reads.
+const TEXT_PREVIEW_BYTES: u64 = 64 * 1024;
+
+/// Details of the selected file, shown as the last column, with its
+/// contents for the kinds the browser can show (images, media, PDF, text).
 #[component]
 fn FilePreview(idx: usize, entry: Entry) -> impl IntoView {
     let st = use_st();
-    let thumb = (util::is_thumbnailable(&entry) && st.previews.get_untracked())
-        .then(|| api::download_url(&entry.path, true));
-    let big = match thumb {
-        Some(url) => view! { <img src=url alt="" draggable="false"/> }.into_any(),
-        None => view! { <span class="fi-wrap" inner_html=icons::file_icon(&entry)></span> }.into_any(),
+    let kind = util::preview_kind(&entry).filter(|_| st.previews.get_untracked());
+    let url = api::download_url(&entry.path, true);
+    let icon = || view! { <span class="fi-wrap" inner_html=icons::file_icon(&entry)></span> };
+    let wide = matches!(kind, Some(PreviewKind::Video | PreviewKind::Pdf | PreviewKind::Text));
+    let big = match kind {
+        Some(PreviewKind::Image) => view! { <div class="big"><img src=url alt="" draggable="false"/></div> }.into_any(),
+        Some(PreviewKind::Video) => view! {
+            <div class="big media"><video src=url controls preload="metadata"></video></div>
+        }
+        .into_any(),
+        Some(PreviewKind::Audio) => view! {
+            <div class="big">{icon()}</div>
+            <audio class="media" src=url controls preload="metadata"></audio>
+        }
+        .into_any(),
+        Some(PreviewKind::Pdf) => view! {
+            <div class="big media"><iframe class="pdf" src=url title="PDF preview"></iframe></div>
+        }
+        .into_any(),
+        Some(PreviewKind::Text) => view! { <TextPreview entry=entry.clone()/> }.into_any(),
+        None => view! { <div class="big">{icon()}</div> }.into_any(),
     };
     let size = format!("{} ({} bytes)", format_size(entry.size), entry.size);
     let modified = entry.modified.map(format_date).unwrap_or_else(|| "Unknown".into());
@@ -305,10 +325,10 @@ fn FilePreview(idx: usize, entry: Entry) -> impl IntoView {
     let dl_entry = entry.clone();
 
     view! {
-        <aside class="preview" aria-label="Preview"
+        <aside class="preview" class:wide=wide aria-label="Preview"
             on:click=|ev: ev::MouseEvent| ev.stop_propagation()
             on:contextmenu=|ev: ev::MouseEvent| ev.stop_propagation()>
-            <div class="big">{big}</div>
+            {big}
             <h3>{entry.name.clone()}</h3>
             <div class="muted">{type_label(&entry)}{" — "}{size_text(&entry)}</div>
             <dl>
@@ -325,5 +345,33 @@ fn FilePreview(idx: usize, entry: Entry) -> impl IntoView {
                 </button>
             </div>
         </aside>
+    }
+}
+
+/// The start of a text file, read with a range request.
+#[component]
+fn TextPreview(entry: Entry) -> impl IntoView {
+    // None while loading; Some(Err) for binary or unreadable files.
+    let text = RwSignal::new(None::<Result<String, String>>);
+    if entry.size == 0 {
+        text.set(Some(Ok(String::new())));
+    } else {
+        let path = entry.path.clone();
+        spawn_local(async move {
+            let res = api::head_bytes(&path, TEXT_PREVIEW_BYTES)
+                .await
+                .and_then(|b| util::preview_text(&b).ok_or_else(|| "Binary file — no text preview".into()));
+            let _ = text.try_set(Some(res));
+        });
+    }
+    let cut = entry.size > TEXT_PREVIEW_BYTES;
+    move || match text.get() {
+        None => view! { <pre class="textprev muted">"Loading…"</pre> }.into_any(),
+        Some(Err(e)) => view! { <div class="col-note">{e}</div> }.into_any(),
+        Some(Ok(t)) if t.is_empty() => view! { <div class="col-note">"Empty file"</div> }.into_any(),
+        Some(Ok(t)) => view! {
+            <pre class="textprev">{t}{cut.then_some("\n…")}</pre>
+        }
+        .into_any(),
     }
 }

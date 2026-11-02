@@ -87,6 +87,21 @@ pub fn download_url(path: &str, inline: bool) -> String {
     format!("api/download?path={}{}", enc(path), if inline { "&inline=true" } else { "" })
 }
 
+/// The first `n` bytes of a file (fewer if it is shorter).
+pub async fn head_bytes(path: &str, n: u64) -> ApiResult<Vec<u8>> {
+    let resp = Request::get(&download_url(path, true))
+        .header("Range", &format!("bytes=0-{}", n.saturating_sub(1)))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.ok() {
+        return Err(format!("Could not read the file (HTTP {})", resp.status()));
+    }
+    let mut bytes = resp.binary().await.map_err(|e| e.to_string())?;
+    bytes.truncate(n as usize);
+    Ok(bytes)
+}
+
 /// Upload files with XHR so we get progress events (fetch has none for uploads).
 /// Each file comes with its path relative to `dir`; for files inside folders
 /// (`photos/2024/a.jpg`) the server creates the folders.

@@ -14,7 +14,8 @@ One container, one port, ~30 MB image, ~350 KB of gzipped WASM.
 - **Four view modes** (Ctrl+1–4): Icons (with image thumbnails and a zoom slider), Compact,
   Details (sortable columns), and **Columns**, a macOS Finder–style view:
   - one column per folder from the root down; click a folder and its contents open to the right
-  - selecting a file shows a preview panel (thumbnail for images, size, dates, Open/Download)
+  - selecting a file shows a preview panel with its contents — images, video, audio, PDFs,
+    and the start of text and source files — plus size, dates and Open/Download
   - Left/Right arrows move between columns, Up/Down within one
   - drag items onto any folder in any column; right-click works in every column
 - **Split view** (F3) with independent history per pane; drag between panes to move, hold Ctrl to copy

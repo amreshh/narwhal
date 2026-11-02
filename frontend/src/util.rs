@@ -170,6 +170,67 @@ pub fn is_thumbnailable(e: &Entry) -> bool {
         && e.size <= 25 * 1024 * 1024
 }
 
+/// How the preview panel can show a file's contents.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PreviewKind {
+    Image,
+    Video,
+    Audio,
+    Pdf,
+    Text,
+}
+
+/// Files without an extension that are almost always plain text.
+const TEXT_NAMES: &[&str] = &[
+    "dockerfile", "containerfile", "makefile", "justfile", "readme", "license", "licence", "copying",
+    "authors", "changelog", "notice", "todo", "procfile", "gemfile", "rakefile", "vagrantfile",
+    ".gitignore", ".gitattributes", ".gitmodules", ".dockerignore", ".editorconfig", ".env",
+    ".bashrc", ".zshrc", ".profile", ".bash_profile", ".npmrc", ".prettierrc", ".eslintrc",
+];
+
+/// The preview a file gets, if the browser can show it. Media and PDFs are
+/// limited to formats browsers play natively; text is read in part, so any
+/// size works.
+pub fn preview_kind(e: &Entry) -> Option<PreviewKind> {
+    if e.kind != EntryKind::File {
+        return None;
+    }
+    if is_thumbnailable(e) {
+        return Some(PreviewKind::Image);
+    }
+    let x = ext(&e.name);
+    match x.as_str() {
+        "mp4" | "m4v" | "webm" | "mov" | "ogv" => return Some(PreviewKind::Video),
+        "mp3" | "ogg" | "oga" | "opus" | "wav" | "m4a" | "aac" | "flac" => return Some(PreviewKind::Audio),
+        "pdf" => return Some(PreviewKind::Pdf),
+        _ => {}
+    }
+    let name = e.name.to_lowercase();
+    let texty = matches!(category(e), Cat::Code | Cat::Text)
+        || TEXT_NAMES.contains(&name.as_str())
+        || matches!(
+            x.as_str(),
+            "jsonc" | "json5" | "ndjson" | "jsonl" | "lock" | "properties" | "gradle" | "cmake" | "mk"
+                | "patch" | "diff" | "srt" | "vtt" | "tex" | "bib" | "graphql" | "proto" | "hcl"
+                | "service" | "desktop" | "mjs" | "cjs" | "less" | "sass" | "ex" | "exs" | "erl"
+                | "hs" | "ml" | "scala" | "clj" | "dart" | "zig" | "r" | "pl" | "ps1" | "bat"
+                | "fish" | "vim" | "el" | "gitignore" | "adoc" | "htm"
+        );
+    texty.then_some(PreviewKind::Text)
+}
+
+/// Turn the first bytes of a file into preview text, or `None` if it looks binary.
+pub fn preview_text(bytes: &[u8]) -> Option<String> {
+    if bytes.contains(&0) {
+        return None;
+    }
+    // The read may have stopped mid-character; drop a broken tail.
+    let s = String::from_utf8_lossy(bytes);
+    let s = s.trim_end_matches('\u{FFFD}');
+    let bad = s.chars().filter(|&c| c == '\u{FFFD}' || (c.is_control() && !c.is_whitespace())).count();
+    (bad * 20 <= s.chars().count().max(1)).then(|| s.to_string())
+}
+
 /// Size column text: item count for folders, bytes for files.
 pub fn size_text(e: &Entry) -> String {
     match e.kind {

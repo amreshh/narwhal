@@ -425,7 +425,18 @@ async fn download(
         headers.insert(header::CONTENT_DISPOSITION, v);
     }
     headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
-    headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("sandbox"));
+    let is_pdf = headers
+        .get(header::CONTENT_TYPE)
+        .is_some_and(|v| v.as_bytes().starts_with(b"application/pdf"));
+    if q.inline && is_pdf {
+        // Browsers' PDF viewers refuse to run in a sandboxed document, and
+        // run PDF scripts in their own isolated viewer anyway. Allow the app
+        // (only) to frame it for the preview panel.
+        headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("frame-ancestors 'self'"));
+        headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("SAMEORIGIN"));
+    } else {
+        headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("sandbox"));
+    }
     Ok(res)
 }
 
