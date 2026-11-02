@@ -63,15 +63,15 @@ copy/move/rename/delete, search, naming).
 ## Container image
 
 ```sh
-docker build -t ghcr.io/your-org/narwhal:0.1.0 .
+docker build -t ghcr.io/amreshh/narwhal:latest .
 
 # Docker: run as your own user so the mounted folder is writable
 docker run --rm -p 8080:8080 --user "$(id -u):$(id -g)" \
-  -v "$HOME/Downloads:/data" ghcr.io/your-org/narwhal:0.1.0
+  -v "$HOME/Downloads:/data" ghcr.io/amreshh/narwhal:latest
 
 # Rootless Podman: map your user to the image's UID 65532 instead
 podman run --rm -p 8080:8080 --userns=keep-id:uid=65532,gid=65532 \
-  -v "$HOME/Downloads:/data" ghcr.io/your-org/narwhal:0.1.0
+  -v "$HOME/Downloads:/data" ghcr.io/amreshh/narwhal:latest
 ```
 
 The server listens on port **8080** inside the container, so the right-hand side
