@@ -1,0 +1,21 @@
+# Dependabot version updates. Only read from the default branch (main);
+# PRs are opened against dev. Security-fix PRs ignore this file and target main.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /            # workspace root: shared, server, frontend + Cargo.lock
+    target-branch: dev
+    schedule:
+      interval: weekly
+    groups:
+      cargo-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
