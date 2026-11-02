@@ -7,6 +7,8 @@ server that confines every operation to one root directory (your PVC).
 
 One container, one port, ~30 MB image, ~650 KB of gzipped WASM.
 
+![The column view: one column per folder, with a preview of the selected photo](docs/screenshots/columns.png)
+
 ## Features
 
 - **Places panel** with the volume and its top-level folders (or a fixed list), plus a free-space meter
@@ -42,6 +44,20 @@ One container, one port, ~30 MB image, ~650 KB of gzipped WASM.
 - Hidden files toggle, natural sorting (`file2` before `file10`), light/dark theme from the OS,
   view preferences remembered per browser, current folder kept in the URL (`#/Photos/2025`)
 - Mouse back/forward buttons work; F1 lists every shortcut
+
+## Screenshots
+
+Icons with image thumbnails (the zoom slider is in the status bar):
+
+![Icons view of a photo folder with thumbnails](docs/screenshots/icons.png)
+
+Quick Look on a spreadsheet, with a tab per sheet:
+
+![Quick Look showing the Expenses sheet of a workbook](docs/screenshots/quicklook.png)
+
+The dark theme, which follows the OS, with a source file in the column view's preview:
+
+![Dark theme: column view previewing a JavaScript file](docs/screenshots/dark.png)
 
 ## Layout
 
