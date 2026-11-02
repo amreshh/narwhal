@@ -1,12 +1,14 @@
 name: container
 
-# dev            -> ghcr.io/<repo>:<short-sha>
-# tag v1.2.3     -> ghcr.io/<repo>:1.2.3, :1.2, :1, :latest  (tag must be on main)
+# dev            -> ghcr.io/<repo>:<short-sha>, :latest
+# tag v1.2.3     -> ghcr.io/<repo>:1.2.3, :1.2, :1  (tag must be on main)
+# tag v1.2.3-rc1 -> ghcr.io/<repo>:1.2.3-rc1 only
 # pull requests  -> build only, nothing pushed
 on:
   push:
     branches: [dev]
-    tags: ["v*"]
+    # Version-shaped tags only, so a stray tag like "vtest" never triggers a release.
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
   pull_request:
     branches: [main, dev]
   workflow_dispatch:
@@ -55,7 +57,7 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/dev' }}
             type=ref,event=pr
 
       - name: Build and push
