@@ -2,6 +2,7 @@
 //! context menu, dialogs and status bar.
 
 use crate::columns::ColumnsView;
+use crate::quicklook::{self, QuickLook};
 use crate::trash::{self, TrashView};
 use crate::{
     api, icons,
@@ -102,6 +103,9 @@ pub fn App() -> impl IntoView {
             <StatusBar/>
             <ContextMenu/>
             <DialogHost/>
+            <Show when=move || st.quicklook.get()>
+                <QuickLook/>
+            </Show>
             <input type="file" multiple=true class="hidden-input" node_ref=st.upload_input on:change=on_files/>
         </div>
     }
@@ -123,6 +127,8 @@ fn on_key(st: AppState, ev: web_sys::KeyboardEvent) {
         if st.menu.get_untracked().is_some() || st.hamburger.get_untracked() {
             st.menu.set(None);
             st.hamburger.set(false);
+        } else if st.quicklook.get_untracked() {
+            st.quicklook.set(false);
         } else if st.upload_panel.get_untracked() {
             st.upload_panel.set(false);
         } else if st.dialog.with_untracked(|d| d.is_some()) {
@@ -136,6 +142,16 @@ fn on_key(st: AppState, ev: web_sys::KeyboardEvent) {
         return;
     }
     st.menu.set(None);
+
+    if key == " " && !ctrl && !alt {
+        quicklook::toggle(st);
+        ev.prevent_default();
+        return;
+    }
+    // Quick Look follows the selection; other keys close it first.
+    if st.quicklook.get_untracked() && !(quicklook::keeps_open(&key) && !ctrl && !alt) {
+        st.quicklook.set(false);
+    }
 
     if st.in_trash(i) {
         let handled = match (key.as_str(), ctrl, alt) {
@@ -1367,6 +1383,7 @@ fn ShortcutsDialog() -> impl IntoView {
         ("Arrows, Home, End", "Move selection (Shift extends)"),
         ("Ctrl+A", "Select all"),
         ("Ctrl+C / Ctrl+X / Ctrl+V", "Copy / cut / paste"),
+        ("Space", "Quick Look: large preview (arrows move on)"),
         ("F2", "Rename"),
         ("Delete", "Move to the Trash"),
         ("Shift+Delete", "Delete permanently"),

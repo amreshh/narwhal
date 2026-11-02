@@ -180,6 +180,11 @@ impl Upload {
     }
 }
 
+/// Column view widths in pixels.
+pub const COL_WIDTH_DEFAULT: u32 = 238;
+pub const COL_WIDTH_MIN: u32 = 120;
+pub const COL_WIDTH_MAX: u32 = 900;
+
 /// Most files that can be uploaded at once.
 pub const MAX_PARALLEL: u32 = 16;
 
@@ -245,6 +250,9 @@ struct Prefs {
     /// Files uploaded at once; None = the server's default.
     #[serde(default)]
     parallel: Option<u32>,
+    /// Column view: width of columns without a width of their own.
+    #[serde(default)]
+    col_width: Option<u32>,
 }
 
 const PREFS_KEY: &str = "narwhal.prefs";
@@ -265,6 +273,11 @@ pub struct AppState {
     pub previews: RwSignal<bool>,
     /// Files uploaded at once, if the user picked a number.
     pub parallel: RwSignal<Option<u32>>,
+    /// Column view: width of every column (Alt+drag sets it).
+    pub col_width: RwSignal<u32>,
+    /// Column view: widths of single resized columns, by folder. Kept for
+    /// this page load only.
+    pub col_widths: RwSignal<HashMap<String, u32>>,
     pub places_open: RwSignal<bool>,
     pub info: RwSignal<Option<Info>>,
     pub clip: RwSignal<Option<Clip>>,
@@ -276,6 +289,8 @@ pub struct AppState {
     pub upload: RwSignal<Option<Upload>>,
     /// The upload details panel is open.
     pub upload_panel: RwSignal<bool>,
+    /// Quick Look (Space) is open on the active pane's selection.
+    pub quicklook: RwSignal<bool>,
     pub upload_dest: RwSignal<Option<String>>,
     pub upload_input: NodeRef<html::Input>,
     /// Paths being dragged from inside the app.
@@ -297,6 +312,7 @@ impl AppState {
             .and_then(|s| s.get_item(PREFS_KEY).ok().flatten())
             .and_then(|raw| serde_json::from_str(&raw).ok());
         let parallel = prefs.as_ref().and_then(|p| p.parallel);
+        let col_width = prefs.as_ref().and_then(|p| p.col_width).unwrap_or(COL_WIDTH_DEFAULT);
         let (view, zoom, hidden, previews, places, sort) = match prefs {
             Some(p) => (p.view, p.zoom, p.hidden, p.previews, p.places, (p.sort, p.asc)),
             None => (ViewMode::Icons, 64, false, true, true, (SortKey::Name, true)),
@@ -311,6 +327,8 @@ impl AppState {
             show_hidden: RwSignal::new(hidden),
             previews: RwSignal::new(previews),
             parallel: RwSignal::new(parallel.map(|n| n.clamp(1, MAX_PARALLEL))),
+            col_width: RwSignal::new(col_width.clamp(COL_WIDTH_MIN, COL_WIDTH_MAX)),
+            col_widths: RwSignal::new(HashMap::new()),
             places_open: RwSignal::new(places),
             info: RwSignal::new(None),
             clip: RwSignal::new(None),
@@ -321,6 +339,7 @@ impl AppState {
             message: RwSignal::new(None),
             upload: RwSignal::new(None),
             upload_panel: RwSignal::new(false),
+            quicklook: RwSignal::new(false),
             upload_dest: RwSignal::new(None),
             upload_input: NodeRef::new(),
             dragging: RwSignal::new(None),
@@ -344,9 +363,31 @@ impl AppState {
             sort,
             asc,
             parallel: self.parallel.get(),
+            col_width: Some(self.col_width.get()).filter(|w| *w != COL_WIDTH_DEFAULT),
         };
         if let (Some(s), Ok(raw)) = (storage(), serde_json::to_string(&prefs)) {
             let _ = s.set_item(PREFS_KEY, &raw);
+        }
+    }
+
+    /// Width of the column showing `folder` (tracked).
+    pub fn column_width(&self, folder: &str) -> u32 {
+        self.col_widths.with(|m| m.get(folder).copied()).unwrap_or_else(|| self.col_width.get())
+    }
+
+    /// Resize one column, or (with `all`) every column, forgetting widths
+    /// set on single columns.
+    pub fn set_column_width(&self, folder: &str, width: u32, all: bool) {
+        let width = width.clamp(COL_WIDTH_MIN, COL_WIDTH_MAX);
+        if all {
+            self.col_width.set(width);
+            if self.col_widths.with_untracked(|m| !m.is_empty()) {
+                self.col_widths.set(HashMap::new());
+            }
+        } else if self.col_widths.with_untracked(|m| m.get(folder) != Some(&width)) {
+            self.col_widths.update(|m| {
+                m.insert(folder.to_string(), width);
+            });
         }
     }
 

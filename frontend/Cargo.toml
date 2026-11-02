@@ -43,6 +43,7 @@ features = [
   "KeyboardEvent",
   "Location",
   "MouseEvent",
+  "PointerEvent",
   "Navigator",
   "ProgressEvent",
   "ScrollIntoViewOptions",

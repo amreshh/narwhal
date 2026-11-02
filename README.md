@@ -17,7 +17,10 @@ One container, one port, ~30 MB image, ~350 KB of gzipped WASM.
   - selecting a file shows a preview panel with its contents — images, video, audio, PDFs,
     and the start of text and source files — plus size, dates and Open/Download
   - Left/Right arrows move between columns, Up/Down within one
+  - drag a column's edge to resize it (Alt+drag: all columns, double-click: fit the names)
   - drag items onto any folder in any column; right-click works in every column
+- **Quick Look** (Space): a large preview of the selected item — images, video, audio, PDFs,
+  text — that follows the arrow keys; Space or Esc closes it
 - **Split view** (F3) with independent history per pane; drag between panes to move, hold Ctrl to copy
 - **Selection** like a desktop: click, Ctrl+click, Shift+click, arrow keys, Ctrl+A
 - **Trash**: Delete moves items to the Trash (with Undo); restore them to where they were, delete
