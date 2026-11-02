@@ -182,9 +182,19 @@ pub fn hex(bytes: &[u8]) -> String {
 }
 
 pub fn file_sha256(mut file: File) -> io::Result<String> {
+    use io::Read;
     use sha2::{Digest, Sha256};
+    // sha2 0.11 hashers no longer implement io::Write, so no io::copy.
     let mut hasher = Sha256::new();
-    io::copy(&mut file, &mut hasher)?;
+    let mut buf = vec![0; 64 * 1024];
+    loop {
+        match file.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => hasher.update(&buf[..n]),
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        }
+    }
     Ok(hex(&hasher.finalize()))
 }
 
@@ -719,6 +729,17 @@ mod tests {
         fs::write(path.join("docs/a (1).txt"), b"hello").unwrap();
         assert_eq!(find_identical(&dir, os("a.txt"), 5, &hash), Some("a (1).txt".into()));
         assert_eq!(find_identical(&dir, os("new.txt"), 5, &hash), None);
+    }
+
+    #[test]
+    fn large_files_hash_like_a_one_shot_digest() {
+        use sha2::{Digest, Sha256};
+        let t = tempfile::tempdir().unwrap();
+        // Several read buffers' worth, and not a whole number of them.
+        let data: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
+        fs::write(t.path().join("big"), &data).unwrap();
+        let hash = file_sha256(fs::File::open(t.path().join("big")).unwrap()).unwrap();
+        assert_eq!(hash, hex(&Sha256::digest(&data)));
     }
 
     #[test]
