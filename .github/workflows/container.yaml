@@ -4,6 +4,7 @@ name: container
 # push to main   -> next version (see below), ghcr.io/<repo>:1.2.3, :1.2, :1,
 #                   then git tag v1.2.3 + GitHub Release with generated notes
 # tag v1.2.3     -> ghcr.io/<repo>:1.2.3, :1.2, :1  (manual; tag must be on main)
+#                   (no major-only tag while on 0.x: 0.x minors can break)
 # tag v1.2.3-rc1 -> ghcr.io/<repo>:1.2.3-rc1 only
 # pull requests  -> build only, nothing pushed
 #
@@ -132,7 +133,7 @@ jobs:
             type=sha,prefix=,format=short,enable=${{ github.ref == 'refs/heads/dev' }}
             type=semver,pattern={{version}},value=${{ needs.version.outputs.version }}
             type=semver,pattern={{major}}.{{minor}},value=${{ needs.version.outputs.version }}
-            type=semver,pattern={{major}},value=${{ needs.version.outputs.version }}
+            type=semver,pattern={{major}},value=${{ needs.version.outputs.version }},enable=${{ !startsWith(needs.version.outputs.version, '0.') && !startsWith(github.ref, 'refs/tags/v0.') }}
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/dev' }}
             type=ref,event=pr
 

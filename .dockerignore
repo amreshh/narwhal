@@ -3,5 +3,6 @@ frontend/dist/
 **/*.rs.bk
 .git/
 deploy/
+docs/
 *.md
 !README.md
