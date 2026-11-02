@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: narwhal
+  labels:
+    app.kubernetes.io/name: narwhal
+spec:
+  # One replica: a ReadWriteOnce volume can only be mounted by one node.
+  # With a ReadWriteMany volume (NFS, CephFS, EFS…) you can scale out and
+  # switch the strategy to RollingUpdate.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: narwhal
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: narwhal
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        # Makes the volume writable for the app user.
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: narwhal
+          image: narwhal:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: NARWHAL_ROOT
+              value: /data
+            - name: NARWHAL_ROOT_NAME
+              value: Storage
+            # Set to "true" to disable every write operation.
+            - name: NARWHAL_READ_ONLY
+              value: "false"
+            # 0 = unlimited. Keep in sync with the ingress body-size limit.
+            - name: NARWHAL_MAX_UPLOAD_MB
+              value: "0"
+            # Optional fixed sidebar entries, e.g. "Documents=/docs,Media=/media".
+            # When empty the sidebar lists the top-level folders.
+            - name: NARWHAL_PLACES
+              value: ""
+            - name: RUST_LOG
+              value: info,tower_http=info
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: narwhal-data

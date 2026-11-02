@@ -1,0 +1,14 @@
+# The storage Narwhal browses. To browse an existing volume instead, delete this
+# file from kustomization.yaml and set `claimName` in deployment.yaml.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: narwhal-data
+  labels:
+    app.kubernetes.io/name: narwhal
+spec:
+  accessModes: ["ReadWriteOnce"]
+  # storageClassName: standard
+  resources:
+    requests:
+      storage: 20Gi

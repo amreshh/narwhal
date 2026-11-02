@@ -1,0 +1,13 @@
+[build]
+target = "index.html"
+dist = "dist"
+# Relative asset URLs so the app can live under any ingress path prefix.
+public_url = "./"
+
+[serve]
+port = 8081
+
+# During `trunk serve`, forward API calls to a locally running server
+# (`cargo run -p narwhal-server` with NARWHAL_ROOT pointing at a test folder).
+[[proxy]]
+backend = "http://127.0.0.1:8080/api/"

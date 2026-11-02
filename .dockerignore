@@ -1,0 +1,7 @@
+target/
+frontend/dist/
+**/*.rs.bk
+.git/
+deploy/
+*.md
+!README.md

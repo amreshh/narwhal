@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
+  <title>Narwhal</title>
+  <link data-trunk rel="icon" href="favicon.svg" />
+  <link data-trunk rel="css" href="style.css" />
+  <link data-trunk rel="rust" data-bin="narwhal-frontend" data-wasm-opt="z"
+        data-wasm-opt-params="--enable-bulk-memory --enable-bulk-memory-opt --enable-nontrapping-float-to-int --enable-sign-ext --enable-mutable-globals --enable-reference-types --enable-multivalue" />
+</head>
+<body>
+  <noscript>Narwhal needs JavaScript and WebAssembly enabled.</noscript>
+</body>
+</html>

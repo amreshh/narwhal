@@ -1,0 +1,34 @@
+# Narwhal has no login of its own: put authentication in front of it.
+# This example uses ingress-nginx with oauth2-proxy (uncomment the auth-*
+# annotations once oauth2-proxy is running). Any other forward-auth works too.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: narwhal
+  labels:
+    app.kubernetes.io/name: narwhal
+  annotations:
+    # Large uploads: no body limit, stream instead of buffering to disk.
+    nginx.ingress.kubernetes.io/proxy-body-size: "0"
+    nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # nginx.ingress.kubernetes.io/auth-url: "https://$host/oauth2/auth"
+    # nginx.ingress.kubernetes.io/auth-signin: "https://$host/oauth2/start?rd=$escaped_request_uri"
+    # cert-manager.io/cluster-issuer: letsencrypt
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: files.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: narwhal
+                port:
+                  name: http
+  # tls:
+  #   - hosts: [files.example.com]
+  #     secretName: narwhal-tls
