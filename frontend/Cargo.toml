@@ -8,7 +8,7 @@ license.workspace = true
 narwhal-shared = { path = "../shared" }
 narwhal-office = { path = "../office" }
 leptos = { version = "0.8", features = ["csr"] }
-gloo-net = { version = "0.6", default-features = false, features = ["http", "json"] }
+gloo-net = { version = "0.7", default-features = false, features = ["http", "json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 wasm-bindgen = "0.2"
