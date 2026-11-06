@@ -3,7 +3,10 @@
 
 use crate::cfb::Cfb;
 use crate::numfmt::{self, Style};
-use crate::{latin1, u16le, u32le, utf16, Block, Doc, Error, Grid, Preview, Sheet, Slide, Span, MAX_CHARS, MAX_SHEETS, MAX_SLIDES};
+use crate::{
+    latin1, u16le, u32le, utf16, Block, Doc, Error, Grid, Preview, Sheet, Slide, Span, MAX_CHARS, MAX_SHEETS,
+    MAX_SLIDES,
+};
 use std::collections::HashMap;
 
 pub fn parse(cfb: &Cfb) -> Result<Preview, Error> {
@@ -31,8 +34,8 @@ pub fn parse(cfb: &Cfb) -> Result<Preview, Error> {
 /// Windows-1252, which Word uses for "compressed" (8-bit) text.
 fn cp1252(b: u8) -> char {
     const HIGH: [char; 32] = [
-        '€', '\u{81}', '‚', 'ƒ', '„', '…', '†', '‡', 'ˆ', '‰', 'Š', '‹', 'Œ', '\u{8d}', 'Ž', '\u{8f}', '\u{90}', '‘', '’', '“',
-        '”', '•', '–', '—', '˜', '™', 'š', '›', 'œ', '\u{9d}', 'ž', 'Ÿ',
+        '€', '\u{81}', '‚', 'ƒ', '„', '…', '†', '‡', 'ˆ', '‰', 'Š', '‹', 'Œ', '\u{8d}', 'Ž', '\u{8f}', '\u{90}', '‘',
+        '’', '“', '”', '•', '–', '—', '˜', '™', 'š', '›', 'œ', '\u{9d}', 'ž', 'Ÿ',
     ];
     match b {
         0x80..=0x9F => HIGH[usize::from(b - 0x80)],
@@ -74,7 +77,11 @@ fn doc_text(cfb: &Cfb, wd: &[u8]) -> Result<String, Error> {
     let n = lcb.saturating_sub(4) / 12;
     let mut text = String::new();
     for i in 0..n {
-        let (Some(cp0), Some(cp1), Some(fc)) = (u32le(plc, i * 4), u32le(plc, i * 4 + 4), u32le(plc, (n + 1) * 4 + i * 8 + 2)) else { break };
+        let (Some(cp0), Some(cp1), Some(fc)) =
+            (u32le(plc, i * 4), u32le(plc, i * 4 + 4), u32le(plc, (n + 1) * 4 + i * 8 + 2))
+        else {
+            break;
+        };
         let (cp0, cp1) = (cp0 as usize, (cp1 as usize).min(ccp_text));
         if cp0 >= ccp_text || text.len() > MAX_CHARS * 2 {
             break;
@@ -112,7 +119,11 @@ fn doc(cfb: &Cfb, wd: &[u8]) -> Result<Preview, Error> {
             _ if fields.last() == Some(&false) => {}
             // Paragraph, table cell and page ends.
             '\r' | '\u{7}' | '\u{c}' => {
-                let spans = if para.is_empty() { Vec::new() } else { vec![Span { text: std::mem::take(&mut para), ..Span::default() }] };
+                let spans = if para.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![Span { text: std::mem::take(&mut para), ..Span::default() }]
+                };
                 if !doc.push(Block::Paragraph(spans)) {
                     break;
                 }
@@ -324,8 +335,13 @@ fn xls(wb: &[u8]) -> Result<Preview, Error> {
             _ => {}
         }
     }
-    let styles: Vec<Style> = xf_formats.iter().map(|id| numfmt::style(*id, formats.get(id).map(String::as_str))).collect();
-    let out: Vec<Sheet> = sheets.into_iter().take(MAX_SHEETS).map(|(name, at)| xls_sheet(wb, at, name, &strings, &styles, date1904)).collect();
+    let styles: Vec<Style> =
+        xf_formats.iter().map(|id| numfmt::style(*id, formats.get(id).map(String::as_str))).collect();
+    let out: Vec<Sheet> = sheets
+        .into_iter()
+        .take(MAX_SHEETS)
+        .map(|(name, at)| xls_sheet(wb, at, name, &strings, &styles, date1904))
+        .collect();
     if out.is_empty() {
         return Err(Error::Unsupported);
     }
@@ -355,7 +371,9 @@ fn xls_sheet(wb: &[u8], at: usize, name: String, strings: &[String], styles: &[S
         let (Some(row), Some(col)) = (u16le(b, 0).map(usize::from), u16le(b, 2).map(usize::from)) else { continue };
         let xf = u16le(b, 4).unwrap_or(0);
         match kind {
-            0x00FD => grid.set(row, col, u32le(b, 6).and_then(|i| strings.get(i as usize)).cloned().unwrap_or_default()),
+            0x00FD => {
+                grid.set(row, col, u32le(b, 6).and_then(|i| strings.get(i as usize)).cloned().unwrap_or_default())
+            }
             0x0204 | 0x00D6 => grid.set(row, col, xl_string(b, 6, 2).unwrap_or_default()),
             0x0203 => {
                 if let Some(v) = b.get(6..14) {

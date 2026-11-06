@@ -18,8 +18,8 @@ use crate::{
     util::{self, format_date, format_size, size_text, type_label, PreviewKind},
 };
 use leptos::{ev, html, prelude::*, task::spawn_local};
-use wasm_bindgen::JsCast;
 use narwhal_shared::Entry;
+use wasm_bindgen::JsCast;
 
 #[component]
 pub fn ColumnsView(idx: usize) -> impl IntoView {
@@ -33,9 +33,7 @@ pub fn ColumnsView(idx: usize) -> impl IntoView {
             return None;
         }
         let path = p.path.get();
-        st.column_entries(idx, &path)
-            .and_then(|r| r.ok())
-            .and_then(|v| v.into_iter().find(|e| sel.contains(&e.path)))
+        st.column_entries(idx, &path).and_then(|r| r.ok()).and_then(|v| v.into_iter().find(|e| sel.contains(&e.path)))
     });
     let folders = Memo::new(move |_| {
         let mut f = util::ancestors(&p.path.get());
@@ -89,9 +87,8 @@ fn drop_handlers(
         if !enabled {
             return; // Bubble to the column.
         }
-        let onto_self = dest.with_value(|d| {
-            st.dragging.with_untracked(|g| g.as_ref().map(|g| g.contains(d)).unwrap_or(false))
-        });
+        let onto_self =
+            dest.with_value(|d| st.dragging.with_untracked(|g| g.as_ref().map(|g| g.contains(d)).unwrap_or(false)));
         if onto_self {
             return;
         }
@@ -280,15 +277,15 @@ fn ColumnRow(
     let selected = move || is_current() && path.with_value(|x| p.selected.with(|s| s.contains(x)));
     let on_trail = move || path.with_value(|x| trail.with(|t| t.as_deref() == Some(x.as_str())));
     let is_cursor = move || {
-        is_current() && st.active.get() == idx && path.with_value(|x| p.cursor.with(|c| c.as_deref() == Some(x.as_str())))
+        is_current()
+            && st.active.get() == idx
+            && path.with_value(|x| p.cursor.with(|c| c.as_deref() == Some(x.as_str())))
     };
-    let is_cut = move || {
-        path.with_value(|x| st.clip.with(|c| c.as_ref().is_some_and(|c| c.cut && c.paths.contains(x))))
-    };
+    let is_cut =
+        move || path.with_value(|x| st.clip.with(|c| c.as_ref().is_some_and(|c| c.cut && c.paths.contains(x))));
     let is_drop = move || path.with_value(|x| st.drop_target.with(|d| d.as_deref() == Some(x.as_str())));
-    let renaming = move || {
-        path.with_value(|x| st.renaming.with(|r| matches!(r, Some((i, rp)) if *i == idx && rp == x)))
-    };
+    let renaming =
+        move || path.with_value(|x| st.renaming.with(|r| matches!(r, Some((i, rp)) if *i == idx && rp == x)));
 
     let on_click = move |ev: ev::MouseEvent| {
         ev.stop_propagation();

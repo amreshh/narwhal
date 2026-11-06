@@ -1,0 +1,6 @@
+# Matches the existing style: long lines, and anything that fits on one
+# line stays on one line.
+max_width = 120
+use_small_heuristics = "Max"
+# Keeps lists of short strings (file extensions, names) packed, not one per line.
+short_array_element_width_threshold = 16

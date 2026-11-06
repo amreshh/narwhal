@@ -190,9 +190,8 @@ fn on_key(st: AppState, ev: web_sys::KeyboardEvent) {
     }
 
     let view_mode = st.view.get_untracked();
-    let column_view = view_mode == ViewMode::Columns
-        && st.panes[i].results.with_untracked(|r| r.is_none())
-        && !st.in_trash(i);
+    let column_view =
+        view_mode == ViewMode::Columns && st.panes[i].results.with_untracked(|r| r.is_none()) && !st.in_trash(i);
     if column_view && !ctrl && !alt && !shift {
         let moved = match key.as_str() {
             "ArrowRight" => {
@@ -271,11 +270,7 @@ fn on_key(st: AppState, ev: web_sys::KeyboardEvent) {
 // Toolbar
 // ===========================================================================
 
-fn tool_button(
-    icon: &'static str,
-    title: &'static str,
-    on_click: impl Fn() + 'static,
-) -> impl IntoView {
+fn tool_button(icon: &'static str, title: &'static str, on_click: impl Fn() + 'static) -> impl IntoView {
     view! {
         <button class="tb" title=title aria-label=title on:click=move |_| on_click()>
             <span class="ic" inner_html=icon></span>
@@ -290,9 +285,8 @@ fn Toolbar() -> impl IntoView {
     let can_back = move || pane().back.with(|b| !b.is_empty());
     let can_fwd = move || pane().forward.with(|f| !f.is_empty());
     let at_root = move || pane().path.with(|p| p == "/" || p == TRASH);
-    let writable = move || {
-        st.info.with(|i| i.as_ref().map(|i| !i.read_only).unwrap_or(false)) && pane().path.with(|p| p != TRASH)
-    };
+    let writable =
+        move || st.info.with(|i| i.as_ref().map(|i| !i.read_only).unwrap_or(false)) && pane().path.with(|p| p != TRASH);
 
     let view_btn = move |mode: ViewMode, icon: &'static str, title: &'static str| {
         view! {
@@ -589,9 +583,8 @@ fn PaneView(idx: usize) -> impl IntoView {
     // Search results are a flat list, so they're shown as details instead;
     // the Trash has a list layout of its own. A memo, so it only notifies
     // when the answer actually changes.
-    let column_view = Memo::new(move |_| {
-        st.view.get() == ViewMode::Columns && p.results.with(|r| r.is_none()) && !in_trash.get()
-    });
+    let column_view =
+        Memo::new(move |_| st.view.get() == ViewMode::Columns && p.results.with(|r| r.is_none()) && !in_trash.get());
 
     let list = move || {
         items
@@ -659,9 +652,7 @@ fn PaneView(idx: usize) -> impl IntoView {
 fn LocationBar(idx: usize) -> impl IntoView {
     let st = use_st();
     let p = st.panes[idx];
-    let root_name = move || {
-        st.info.with(|i| i.as_ref().map(|i| i.name.clone())).unwrap_or_else(|| "Storage".into())
-    };
+    let root_name = move || st.info.with(|i| i.as_ref().map(|i| i.name.clone())).unwrap_or_else(|| "Storage".into());
     let crumbs = move || {
         let path = p.path.get();
         let mut acc = String::new();
@@ -767,9 +758,7 @@ fn SearchBar(idx: usize) -> impl IntoView {
             let _ = el.focus();
         }
     });
-    let count = move || {
-        p.results.with(|r| r.as_ref().map(|r| util::plural(r.len(), "result", "results")))
-    };
+    let count = move || p.results.with(|r| r.as_ref().map(|r| util::plural(r.len(), "result", "results")));
     view! {
         <div class="bar searchbar">
             <span class="ic" inner_html=icons::SEARCH></span>
@@ -986,10 +975,8 @@ fn Item(idx: usize, pos: usize, entry: Entry) -> impl IntoView {
             view! { <span class="name">{name.clone()}</span> }.into_any()
         }
     };
-    let subtitle = p
-        .results
-        .with_untracked(|r| r.is_some())
-        .then(|| view! { <span class="where">{vparent(&entry.path)}</span> });
+    let subtitle =
+        p.results.with_untracked(|r| r.is_some()).then(|| view! { <span class="where">{vparent(&entry.path)}</span> });
 
     view! {
         <div class="item" role="gridcell"
@@ -1059,7 +1046,13 @@ pub fn RenameBox(idx: usize, path: String, name: String) -> impl IntoView {
 // Context menu
 // ===========================================================================
 
-pub(crate) fn mi(st: AppState, label: &'static str, keys: &'static str, icon: &'static str, f: impl Fn() + 'static) -> impl IntoView {
+pub(crate) fn mi(
+    st: AppState,
+    label: &'static str,
+    keys: &'static str,
+    icon: &'static str,
+    f: impl Fn() + 'static,
+) -> impl IntoView {
     view! {
         <button class="mi" role="menuitem"
             on:click=move |ev: ev::MouseEvent| {
@@ -1075,7 +1068,13 @@ pub(crate) fn mi(st: AppState, label: &'static str, keys: &'static str, icon: &'
     }
 }
 
-fn mcheck(st: AppState, label: &'static str, keys: &'static str, checked: bool, f: impl Fn() + 'static) -> impl IntoView {
+fn mcheck(
+    st: AppState,
+    label: &'static str,
+    keys: &'static str,
+    checked: bool,
+    f: impl Fn() + 'static,
+) -> impl IntoView {
     mi(st, label, keys, if checked { icons::CHECK } else { icons::EMPTY }, f)
 }
 
@@ -1437,7 +1436,8 @@ fn StatusBar() -> impl IntoView {
                 let dirs = vis.iter().filter(|e| e.is_dir()).count();
                 let files = vis.len() - dirs;
                 let bytes: u64 = vis.iter().map(|e| e.size).sum();
-                let mut s = format!("{}, {}", util::plural(dirs, "folder", "folders"), util::plural(files, "file", "files"));
+                let mut s =
+                    format!("{}, {}", util::plural(dirs, "folder", "folders"), util::plural(files, "file", "files"));
                 if files > 0 {
                     s.push_str(&format!(" ({})", format_size(bytes)));
                 }
@@ -1568,12 +1568,12 @@ fn UploadPanel() -> impl IntoView {
         })
     };
     let pct = move || st.upload.with(|u| u.as_ref().map(|u| u.progress()).unwrap_or(0.0));
-    let any_pending = move || st.upload.with(|u| u.as_ref().is_some_and(|u| u.states.iter().any(FileState::is_pending)));
+    let any_pending =
+        move || st.upload.with(|u| u.as_ref().is_some_and(|u| u.states.iter().any(FileState::is_pending)));
 
     // Keep the files being worked on in view (the first one, as several go at once).
-    let first_busy = Memo::new(move |_| {
-        st.upload.with(|u| u.as_ref().and_then(|u| u.states.iter().position(FileState::is_busy)))
-    });
+    let first_busy =
+        Memo::new(move |_| st.upload.with(|u| u.as_ref().and_then(|u| u.states.iter().position(FileState::is_busy))));
     let list = NodeRef::<html::Ul>::new();
     Effect::new(move |_| {
         first_busy.track();

@@ -143,9 +143,8 @@ fn TrashRow(idx: usize, pos: usize, item: TrashItem) -> impl IntoView {
     let p = st.panes[idx];
     let id = StoredValue::new(item.id.clone());
     let selected = move || id.with_value(|id| p.selected.with(|s| s.contains(id)));
-    let is_cursor = move || {
-        st.active.get() == idx && id.with_value(|id| p.cursor.with(|c| c.as_deref() == Some(id.as_str())))
-    };
+    let is_cursor =
+        move || st.active.get() == idx && id.with_value(|id| p.cursor.with(|c| c.as_deref() == Some(id.as_str())));
 
     let on_click = move |ev: ev::MouseEvent| {
         ev.stop_propagation();
@@ -181,7 +180,11 @@ fn TrashRow(idx: usize, pos: usize, item: TrashItem) -> impl IntoView {
 
     let e = &item.entry;
     let origin = vparent(&e.path);
-    let origin_label = if origin == "/" { st.info.with_untracked(|i| i.as_ref().map(|i| i.name.clone())).unwrap_or("/".into()) } else { origin.clone() };
+    let origin_label = if origin == "/" {
+        st.info.with_untracked(|i| i.as_ref().map(|i| i.name.clone())).unwrap_or("/".into())
+    } else {
+        origin.clone()
+    };
     view! {
         <div class="item" role="gridcell" class:selected=selected class:cursor=is_cursor class:dim={e.hidden}
             aria-selected=move || if selected() { "true" } else { "false" }

@@ -71,7 +71,9 @@ fn document(blocks: &[Block], cut: bool) -> AnyView {
         .map(|b| match b {
             Block::Heading(level, s) => heading(*level, s),
             Block::Paragraph(s) => view! { <p>{spans(s)}</p> }.into_any(),
-            Block::ListItem(level, s) => view! { <p class="oli" style=format!("--lvl:{level}")>{spans(s)}</p> }.into_any(),
+            Block::ListItem(level, s) => {
+                view! { <p class="oli" style=format!("--lvl:{level}")>{spans(s)}</p> }.into_any()
+            }
             Block::Table(rows) => view! {
                 <table class="otable">
                     <tbody>

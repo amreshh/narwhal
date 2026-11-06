@@ -9,7 +9,8 @@ use std::collections::HashMap;
 
 /// The document, if `zip` is an OpenDocument file.
 pub fn parse(zip: &Zip) -> Option<Result<Preview, Error>> {
-    let mime = zip.read("mimetype", 200).map(|(b, _)| String::from_utf8_lossy(&b).trim().to_string()).unwrap_or_default();
+    let mime =
+        zip.read("mimetype", 200).map(|(b, _)| String::from_utf8_lossy(&b).trim().to_string()).unwrap_or_default();
     if !zip.has("content.xml") || !(mime.is_empty() || mime.starts_with("application/vnd.oasis.opendocument.")) {
         return None;
     }
@@ -18,7 +19,9 @@ pub fn parse(zip: &Zip) -> Option<Result<Preview, Error>> {
         return Some(Err(Error::Encrypted));
     }
     let (xml, cut) = zip.text("content.xml")?;
-    let is = |kind: &str| mime.contains(&format!(".{kind}")) || (mime.is_empty() && xml.contains(&format!("<office:{kind}")));
+    let is = |kind: &str| {
+        mime.contains(&format!(".{kind}")) || (mime.is_empty() && xml.contains(&format!("<office:{kind}")))
+    };
     Some(Ok(if is("spreadsheet") {
         sheets(&xml)
     } else if is("presentation") {
@@ -97,7 +100,11 @@ fn text(xml: &str, cut: bool) -> Preview {
                 "span" => {
                     let outer = spans.last().copied().or(paras.last().map(|p| p.fmt)).unwrap_or_default();
                     let f = lookup(&styles).unwrap_or_default();
-                    spans.push(Fmt { bold: outer.bold || f.bold, italic: outer.italic || f.italic, underline: outer.underline || f.underline });
+                    spans.push(Fmt {
+                        bold: outer.bold || f.bold,
+                        italic: outer.italic || f.italic,
+                        underline: outer.underline || f.underline,
+                    });
                 }
                 "list" => lists = lists.saturating_add(1),
                 "table" if in_body => body.table_start(),
@@ -310,7 +317,10 @@ mod tests {
             <text:list><text:list-item><text:p>item</text:p></text:list-item></text:list>
             <table:table><table:table-row><table:table-cell><text:p>x</text:p></table:table-cell></table:table-row></table:table>
             </office:text></office:body></office:document-content>"#;
-        let Ok(Preview::Document { blocks, .. }) = parse(&odf("application/vnd.oasis.opendocument.text", content)) else { panic!() };
+        let Ok(Preview::Document { blocks, .. }) = parse(&odf("application/vnd.oasis.opendocument.text", content))
+        else {
+            panic!()
+        };
         let s = |t: &str, bold: bool| Span { text: t.into(), bold, ..Default::default() };
         assert_eq!(
             blocks,
@@ -330,7 +340,9 @@ mod tests {
             <table:table-row><table:table-cell office:value-type="string"><text:p>a</text:p></table:table-cell><table:table-cell table:number-columns-repeated="2"><text:p>r</text:p></table:table-cell><table:table-cell table:number-columns-repeated="16380"/></table:table-row>
             <table:table-row table:number-rows-repeated="1048570"><table:table-cell table:number-columns-repeated="16384"/></table:table-row>
             </table:table></office:spreadsheet></office:body></office:document-content>"#;
-        let Ok(Preview::Sheets(sheets)) = parse(&odf("application/vnd.oasis.opendocument.spreadsheet", content)) else { panic!() };
+        let Ok(Preview::Sheets(sheets)) = parse(&odf("application/vnd.oasis.opendocument.spreadsheet", content)) else {
+            panic!()
+        };
         assert_eq!(sheets.len(), 1);
         assert_eq!((sheets[0].name.as_str(), sheets[0].cut), ("Data", false));
         assert_eq!(sheets[0].rows, vec![vec!["a".to_string(), "r".into(), "r".into()]]);
@@ -343,7 +355,11 @@ mod tests {
             <draw:frame presentation:class="outline"><draw:text-box><text:list><text:list-item><text:p>one</text:p></text:list-item></text:list></draw:text-box></draw:frame>
             <presentation:notes><draw:frame><draw:text-box><text:p>secret notes</text:p></draw:text-box></draw:frame></presentation:notes></draw:page>
             </office:presentation></office:body></office:document-content>"#;
-        let Ok(Preview::Slides { slides, .. }) = parse(&odf("application/vnd.oasis.opendocument.presentation", content)) else { panic!() };
+        let Ok(Preview::Slides { slides, .. }) =
+            parse(&odf("application/vnd.oasis.opendocument.presentation", content))
+        else {
+            panic!()
+        };
         assert_eq!(slides, vec![Slide { title: "Hello".into(), lines: vec!["one".into()] }]);
     }
 

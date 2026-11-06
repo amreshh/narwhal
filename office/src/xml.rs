@@ -127,7 +127,9 @@ mod tests {
 
     #[test]
     fn names_attributes_and_text() {
-        let mut x = Xml::new(r#"<?xml version="1.0"?><w:p a:id="1" id="2" w:val="x &amp; y"><w:t>A &lt;b&gt; &#x263A;</w:t><w:b/></w:p>"#);
+        let mut x = Xml::new(
+            r#"<?xml version="1.0"?><w:p a:id="1" id="2" w:val="x &amp; y"><w:t>A &lt;b&gt; &#x263A;</w:t><w:b/></w:p>"#,
+        );
         let Some(Tok::Open(p)) = x.next() else { panic!() };
         assert_eq!(p.name(), "p");
         assert_eq!(p.attr_ns("id").as_deref(), Some("1"));

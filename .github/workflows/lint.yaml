@@ -1,0 +1,51 @@
+name: lint
+
+# Formatting (rustfmt, settings in rustfmt.toml) and lints (clippy).
+# Separate from the container workflow: a failure shows on the commit or PR
+# but doesn't stop images from being built.
+#
+# Fix formatting locally with: cargo fmt --all
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  fmt:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Toolchain
+        run: rustup toolchain install stable --profile minimal --component rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+  clippy:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup target add wasm32-unknown-unknown
+
+      # Caches ~/.cargo and target/ between runs, keyed on Cargo.lock and the toolchain.
+      - uses: Swatinem/rust-cache@v2
+
+      # The frontend only builds for the browser, so it's checked for wasm on its own.
+      - name: Clippy
+        run: |
+          cargo clippy --locked -p narwhal-server -p narwhal-shared -p narwhal-office --all-targets -- -D warnings
+          cargo clippy --locked -p narwhal-frontend --target wasm32-unknown-unknown -- -D warnings

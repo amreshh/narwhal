@@ -17,11 +17,11 @@ use axum::{
 };
 use confined::{Dir, Root};
 use error::{ApiError, ApiResult};
-use serde::Deserialize;
 use narwhal_shared::{
-    vjoin, vname, CreateReq, DeleteReq, Entry, Info, Listing, OpReport, Place, RenameReq, SizeReport,
-    TransferReq, TrashItem, TrashReq,
+    vjoin, vname, CreateReq, DeleteReq, Entry, Info, Listing, OpReport, Place, RenameReq, SizeReport, TransferReq,
+    TrashItem, TrashReq,
 };
+use serde::Deserialize;
 use std::{
     ffi::OsString,
     net::SocketAddr,
@@ -119,8 +119,7 @@ fn raise_open_file_limit() {
 async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,tower_http=info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,tower_http=info".into()),
         )
         .init();
     raise_open_file_limit();
@@ -167,9 +166,7 @@ async fn main() {
         "starting narwhal on {local} ({stack})"
     );
     if static_dir.canonicalize().is_ok_and(|s| s.starts_with(cfg.root.path())) && !cfg.read_only {
-        tracing::warn!(
-            "NARWHAL_STATIC_DIR is inside NARWHAL_ROOT: anyone using the app can change the app itself"
-        );
+        tracing::warn!("NARWHAL_STATIC_DIR is inside NARWHAL_ROOT: anyone using the app can change the app itself");
     }
 
     let api = Router::new()
@@ -193,9 +190,7 @@ async fn main() {
         .with_state(cfg.clone());
 
     // The SPA: hashed assets from trunk, index.html as fallback.
-    let spa = Compression::new(
-        ServeDir::new(&static_dir).fallback(ServeFile::new(static_dir.join("index.html"))),
-    );
+    let spa = Compression::new(ServeDir::new(&static_dir).fallback(ServeFile::new(static_dir.join("index.html"))));
 
     if cfg.trash && !cfg.read_only && cfg.trash_days > 0 {
         let c = cfg.clone();
@@ -213,15 +208,10 @@ async fn main() {
         });
     }
 
-    let app = api
-        .fallback_service(spa)
-        .layer(middleware::from_fn_with_state(cfg, guard))
-        .layer(TraceLayer::new_for_http());
+    let app =
+        api.fallback_service(spa).layer(middleware::from_fn_with_state(cfg, guard)).layer(TraceLayer::new_for_http());
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .expect("server error");
+    axum::serve(listener, app).with_graceful_shutdown(shutdown_signal()).await.expect("server error");
 }
 
 /// Open the listening socket.
@@ -494,10 +484,7 @@ async fn list(State(cfg): State<AppState>, Query(q): Query<PathQuery>) -> ApiRes
     blocking(move || fsops::list_dir(&cfg.root, &q.path)).await.map(Json)
 }
 
-async fn search(
-    State(cfg): State<AppState>,
-    Query(q): Query<SearchQuery>,
-) -> ApiResult<Json<Vec<Entry>>> {
+async fn search(State(cfg): State<AppState>, Query(q): Query<SearchQuery>) -> ApiResult<Json<Vec<Entry>>> {
     let limit = q.limit.unwrap_or(500).clamp(1, 5000);
     blocking(move || fsops::search(&cfg.root, &q.path, &q.q, limit)).await.map(Json)
 }
@@ -564,10 +551,7 @@ async fn trash_empty(State(cfg): State<AppState>) -> ApiResult<Json<OpReport>> {
     blocking(move || Ok(trash::empty(&cfg.root))).await.map(Json)
 }
 
-async fn transfer(
-    State(cfg): State<AppState>,
-    Json(req): Json<TransferReq>,
-) -> ApiResult<Json<OpReport>> {
+async fn transfer(State(cfg): State<AppState>, Json(req): Json<TransferReq>) -> ApiResult<Json<OpReport>> {
     ensure_writable(&cfg)?;
     blocking(move || fsops::transfer(&cfg.root, &req)).await.map(Json)
 }
@@ -575,11 +559,7 @@ async fn transfer(
 /// Streams a file with Range/ETag support. `inline=true` is used for
 /// previews; those responses are sandboxed so uploaded HTML/SVG cannot run
 /// script against this origin.
-async fn download(
-    State(cfg): State<AppState>,
-    Query(q): Query<DownloadQuery>,
-    req: Request,
-) -> ApiResult<Response> {
+async fn download(State(cfg): State<AppState>, Query(q): Query<DownloadQuery>, req: Request) -> ApiResult<Response> {
     let name = vname(&fsops::normalize_virtual(&q.path)?).to_string();
     let path = q.path.clone();
     let (file, _) = blocking(move || fsops::open_file(&cfg.root, &path)).await?;
@@ -642,11 +622,7 @@ const UPLOAD_STALL: std::time::Duration = std::time::Duration::from_secs(60);
 /// match what was received. Until then it is a hidden temp file, which is
 /// deleted if anything goes wrong (including the client going away).
 /// Returns the file's virtual path.
-async fn upload(
-    State(cfg): State<AppState>,
-    Query(q): Query<UploadQuery>,
-    body: Body,
-) -> ApiResult<Json<String>> {
+async fn upload(State(cfg): State<AppState>, Query(q): Query<UploadQuery>, body: Body) -> ApiResult<Json<String>> {
     use futures_util::StreamExt;
     use sha2::{Digest, Sha256};
 
@@ -725,10 +701,7 @@ mod tests {
     }
 
     fn headers(pairs: &[(&'static str, &'static str)]) -> HeaderMap {
-        pairs
-            .iter()
-            .map(|(k, v)| (header::HeaderName::from_static(k), HeaderValue::from_static(v)))
-            .collect()
+        pairs.iter().map(|(k, v)| (header::HeaderName::from_static(k), HeaderValue::from_static(v))).collect()
     }
 
     #[test]
@@ -747,7 +720,13 @@ mod tests {
         // Same origin, by fetch metadata or by Origin header.
         assert!(check_request(post, host, &headers(&[("sec-fetch-site", "same-origin")]), &[]).is_ok());
         assert!(check_request(post, host, &headers(&[("origin", "https://files.example.com")]), &[]).is_ok());
-        assert!(check_request(post, Some("Files.Example.com"), &headers(&[("origin", "https://files.example.com")]), &[]).is_ok());
+        assert!(check_request(
+            post,
+            Some("Files.Example.com"),
+            &headers(&[("origin", "https://files.example.com")]),
+            &[]
+        )
+        .is_ok());
         // Non-browser clients send neither.
         assert!(check_request(post, host, &headers(&[]), &[]).is_ok());
         // Another site.

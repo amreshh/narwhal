@@ -3,13 +3,13 @@
 
 use crate::upload::Cancel;
 use gloo_net::http::{Request, Response};
-use serde::{de::DeserializeOwned, Serialize};
 use narwhal_shared::{
-    CreateReq, DeleteReq, Entry, ErrorBody, Info, Listing, OpReport, RenameReq, SizeReport,
-    TransferOp, TransferReq, TrashItem, TrashReq,
+    CreateReq, DeleteReq, Entry, ErrorBody, Info, Listing, OpReport, RenameReq, SizeReport, TransferOp, TransferReq,
+    TrashItem, TrashReq,
 };
-use wasm_bindgen::{prelude::*, JsCast};
+use serde::{de::DeserializeOwned, Serialize};
 use std::{cell::Cell, rc::Rc};
+use wasm_bindgen::{prelude::*, JsCast};
 use web_sys::{ProgressEvent, XmlHttpRequest};
 
 pub type ApiResult<T> = Result<T, String>;
@@ -40,12 +40,7 @@ async fn get<T: DeserializeOwned>(url: &str) -> ApiResult<T> {
 }
 
 async fn post<B: Serialize, T: DeserializeOwned>(url: &str, body: &B) -> ApiResult<T> {
-    let resp = Request::post(url)
-        .json(body)
-        .map_err(|e| e.to_string())?
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    let resp = Request::post(url).json(body).map_err(|e| e.to_string())?.send().await.map_err(|e| e.to_string())?;
     parse(resp).await
 }
 

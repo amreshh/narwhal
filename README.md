@@ -95,6 +95,10 @@ symlink escape and races, copy/move/rename/delete, Trash, search, naming, docume
 To check the document readers on your own files:
 `OFFICE_SAMPLES=some/folder cargo test -p narwhal-office samples -- --ignored --nocapture`.
 
+Formatting and lints (checked by the `lint` workflow): `cargo fmt --all`, then
+`cargo clippy -p narwhal-server -p narwhal-shared -p narwhal-office --all-targets` and
+`cargo clippy -p narwhal-frontend --target wasm32-unknown-unknown`.
+
 ## Container image
 
 ```sh

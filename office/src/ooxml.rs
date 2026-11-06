@@ -8,11 +8,8 @@ use std::collections::HashMap;
 
 /// The document, if `zip` is an Office Open XML package.
 pub fn parse(zip: &Zip) -> Option<Result<Preview, Error>> {
-    let main = rels(zip, "")
-        .into_iter()
-        .find(|r| r.kind.ends_with("/officeDocument"))
-        .map(|r| r.target)
-        .or_else(|| {
+    let main =
+        rels(zip, "").into_iter().find(|r| r.kind.ends_with("/officeDocument")).map(|r| r.target).or_else(|| {
             ["word/document.xml", "xl/workbook.xml", "ppt/presentation.xml"]
                 .into_iter()
                 .find(|p| zip.has(p))
@@ -281,7 +278,10 @@ fn docx(zip: &Zip, part: &str) -> Result<Preview, Error> {
                 "t" => in_text = false,
                 "p" => {
                     if let Some(p) = paras.pop() {
-                        let heading = p.outline.map(|l| l + 1).or_else(|| p.style.as_ref().and_then(|s| headings.get(s).copied()));
+                        let heading = p
+                            .outline
+                            .map(|l| l + 1)
+                            .or_else(|| p.style.as_ref().and_then(|s| headings.get(s).copied()));
                         if !body.paragraph(p.spans, heading, p.list) {
                             break;
                         }
@@ -468,7 +468,10 @@ fn xlsx(zip: &Zip, part: &str) -> Result<Preview, Error> {
             _ => {}
         }
     }
-    let strings = related(&rels, "/sharedStrings").and_then(|p| zip.text(&p)).map(|(s, _)| shared_strings(&s)).unwrap_or_default();
+    let strings = related(&rels, "/sharedStrings")
+        .and_then(|p| zip.text(&p))
+        .map(|(s, _)| shared_strings(&s))
+        .unwrap_or_default();
     let styles = related(&rels, "/styles").and_then(|p| zip.text(&p)).map(|(s, _)| cell_styles(&s)).unwrap_or_default();
     let book = Book { strings: &strings, styles: &styles, date1904 };
     let out: Vec<Sheet> = sheets
@@ -623,7 +626,8 @@ mod tests {
             <Relationship Id="rId2" Type="x/worksheet" Target="worksheets/sheet2.xml"/>
             <Relationship Id="rId3" Type="x/sharedStrings" Target="sharedStrings.xml"/>
             <Relationship Id="rId4" Type="x/styles" Target="/xl/styles.xml"/></Relationships>"#;
-        let sst = r#"<sst><si><t>Name</t></si><si><r><t>Ri</t></r><r><t>ch</t></r><rPh><t>ignored</t></rPh></si></sst>"#;
+        let sst =
+            r#"<sst><si><t>Name</t></si><si><r><t>Ri</t></r><r><t>ch</t></r><rPh><t>ignored</t></rPh></si></sst>"#;
         let styles = r#"<styleSheet><numFmts><numFmt numFmtId="164" formatCode="0.0%"/></numFmts><cellXfs><xf numFmtId="0"/><xf numFmtId="14"/><xf numFmtId="164"/></cellXfs></styleSheet>"#;
         let sheet1 = r#"<worksheet><sheetData>
             <row r="1"><c r="A1" t="s"><v>0</v></c><c r="C1" t="s"><v>1</v></c></row>
@@ -644,7 +648,11 @@ mod tests {
         let row = |r: &[&str]| r.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert_eq!(
             sheets[0].rows,
-            vec![row(&["Name", "", "Rich", "", ""]), row(&["", "", "", "", ""]), row(&["42", "2025-01-01", "25.6%", "TRUE", "inline"])]
+            vec![
+                row(&["Name", "", "Rich", "", ""]),
+                row(&["", "", "", "", ""]),
+                row(&["42", "2025-01-01", "25.6%", "TRUE", "inline"])
+            ]
         );
         assert_eq!(cell_ref("AA10"), Some((9, 26)));
         assert_eq!(cell_ref("A0"), None);

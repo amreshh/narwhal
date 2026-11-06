@@ -109,16 +109,16 @@ pub fn category(e: &Entry) -> Cat {
         return Cat::Folder;
     }
     match ext(&e.name).as_str() {
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg" | "ico" | "tif" | "tiff" | "avif"
-        | "heic" | "psd" | "xcf" | "raw" | "cr2" | "nef" => Cat::Image,
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg" | "ico" | "tif" | "tiff" | "avif" | "heic" | "psd"
+        | "xcf" | "raw" | "cr2" | "nef" => Cat::Image,
         "mp4" | "mkv" | "webm" | "mov" | "avi" | "m4v" | "wmv" | "flv" | "mpg" | "mpeg" => Cat::Video,
         "mp3" | "flac" | "ogg" | "opus" | "wav" | "m4a" | "aac" | "wma" | "aiff" => Cat::Audio,
-        "zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "zst" | "7z" | "rar" | "deb" | "rpm" | "jar"
-        | "apk" => Cat::Archive,
-        "rs" | "js" | "ts" | "tsx" | "jsx" | "py" | "go" | "c" | "h" | "cpp" | "hpp" | "java" | "kt"
-        | "rb" | "php" | "sh" | "bash" | "zsh" | "html" | "css" | "scss" | "json" | "yaml" | "yml"
-        | "toml" | "xml" | "sql" | "lua" | "swift" | "cs" | "vue" | "svelte" | "dockerfile" | "tf"
-        | "nix" => Cat::Code,
+        "zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "zst" | "7z" | "rar" | "deb" | "rpm" | "jar" | "apk" => {
+            Cat::Archive
+        }
+        "rs" | "js" | "ts" | "tsx" | "jsx" | "py" | "go" | "c" | "h" | "cpp" | "hpp" | "java" | "kt" | "rb" | "php"
+        | "sh" | "bash" | "zsh" | "html" | "css" | "scss" | "json" | "yaml" | "yml" | "toml" | "xml" | "sql"
+        | "lua" | "swift" | "cs" | "vue" | "svelte" | "dockerfile" | "tf" | "nix" => Cat::Code,
         "txt" | "md" | "log" | "csv" | "tsv" | "ini" | "conf" | "cfg" | "env" | "rst" | "org" => Cat::Text,
         "pdf" => Cat::Pdf,
         "doc" | "docx" | "docm" | "dot" | "dotx" | "dotm" | "odt" | "ott" | "rtf" | "pages" | "epub" => Cat::Document,
@@ -202,10 +202,10 @@ pub enum PreviewKind {
 
 /// Files without an extension that are almost always plain text.
 const TEXT_NAMES: &[&str] = &[
-    "dockerfile", "containerfile", "makefile", "justfile", "readme", "license", "licence", "copying",
-    "authors", "changelog", "notice", "todo", "procfile", "gemfile", "rakefile", "vagrantfile",
-    ".gitignore", ".gitattributes", ".gitmodules", ".dockerignore", ".editorconfig", ".env",
-    ".bashrc", ".zshrc", ".profile", ".bash_profile", ".npmrc", ".prettierrc", ".eslintrc",
+    "dockerfile", "containerfile", "makefile", "justfile", "readme", "license", "licence", "copying", "authors",
+    "changelog", "notice", "todo", "procfile", "gemfile", "rakefile", "vagrantfile", ".gitignore", ".gitattributes",
+    ".gitmodules", ".dockerignore", ".editorconfig", ".env", ".bashrc", ".zshrc", ".profile", ".bash_profile",
+    ".npmrc", ".prettierrc", ".eslintrc",
 ];
 
 /// The preview a file gets, if the browser can show it. Media and PDFs are
@@ -227,6 +227,7 @@ pub fn preview_kind(e: &Entry) -> Option<PreviewKind> {
         _ => {}
     }
     let name = e.name.to_lowercase();
+    #[rustfmt::skip] // Keeps the extension list packed instead of one per line.
     let texty = matches!(category(e), Cat::Code | Cat::Text)
         || TEXT_NAMES.contains(&name.as_str())
         || matches!(
@@ -333,9 +334,7 @@ pub fn dropped_entries(dt: &web_sys::DataTransfer) -> Vec<web_sys::FileSystemEnt
 
 /// Walk dropped entries, descending into folders, and return every file
 /// with its relative path. Empty folders are skipped.
-pub async fn read_entries(
-    entries: Vec<web_sys::FileSystemEntry>,
-) -> Result<Vec<(String, web_sys::File)>, String> {
+pub async fn read_entries(entries: Vec<web_sys::FileSystemEntry>) -> Result<Vec<(String, web_sys::File)>, String> {
     use js_sys::{Array, Promise};
     use wasm_bindgen::JsCast;
     use wasm_bindgen_futures::JsFuture;
