@@ -1,6 +1,5 @@
-# Markdown summary of a Trivy JSON report, for the ci workflow's run summary:
-#   jq -r -f .github/trivy-summary.jq trivy.json >> "$GITHUB_STEP_SUMMARY"
-# Builds fail on HIGH or CRITICAL vulnerabilities that have a fix (see ci.yaml).
+# Markdown summary of a Trivy JSON report, for the job summary (see action.yml).
+# Builds fail on HIGH or CRITICAL vulnerabilities that have a fix.
 [.Results[]?.Vulnerabilities[]?] as $v
 | [$v[] | select((.Severity == "HIGH" or .Severity == "CRITICAL") and (.FixedVersion // "") != "")] as $bad
 | "## Image scan (Trivy)",
