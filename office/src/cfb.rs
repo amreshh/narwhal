@@ -70,7 +70,8 @@ impl<'a> Cfb<'a> {
         let sectors = data.len() / size;
         // The sectors of the allocation table: 109 listed in the header,
         // the rest in a chain of DIFAT sectors.
-        let mut fat_sectors: Vec<u32> = (0..109).filter_map(|i| u32le(data, 0x4C + i * 4)).filter(|&s| s < LAST_SECTOR).collect();
+        let mut fat_sectors: Vec<u32> =
+            (0..109).filter_map(|i| u32le(data, 0x4C + i * 4)).filter(|&s| s < LAST_SECTOR).collect();
         let mut difat = u32le(data, 0x44)?;
         for _ in 0..sectors {
             if difat >= LAST_SECTOR {
@@ -177,7 +178,11 @@ pub(crate) mod tests {
                 sectors.push(s);
                 fat.push(if i + 1 == chunks.len() { 0xFFFF_FFFE } else { start + i as u32 + 1 });
             }
-            if chunks.is_empty() { 0xFFFF_FFFE } else { start }
+            if chunks.is_empty() {
+                0xFFFF_FFFE
+            } else {
+                start
+            }
         };
         // Mini stream: streams under 4096 bytes, in 64-byte blocks.
         let (mut mini, mut mini_fat, mut starts) = (Vec::new(), Vec::new(), Vec::new());

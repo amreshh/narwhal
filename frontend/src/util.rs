@@ -109,16 +109,16 @@ pub fn category(e: &Entry) -> Cat {
         return Cat::Folder;
     }
     match ext(&e.name).as_str() {
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg" | "ico" | "tif" | "tiff" | "avif"
-        | "heic" | "psd" | "xcf" | "raw" | "cr2" | "nef" => Cat::Image,
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg" | "ico" | "tif" | "tiff" | "avif" | "heic" | "psd"
+        | "xcf" | "raw" | "cr2" | "nef" => Cat::Image,
         "mp4" | "mkv" | "webm" | "mov" | "avi" | "m4v" | "wmv" | "flv" | "mpg" | "mpeg" => Cat::Video,
         "mp3" | "flac" | "ogg" | "opus" | "wav" | "m4a" | "aac" | "wma" | "aiff" => Cat::Audio,
-        "zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "zst" | "7z" | "rar" | "deb" | "rpm" | "jar"
-        | "apk" => Cat::Archive,
-        "rs" | "js" | "ts" | "tsx" | "jsx" | "py" | "go" | "c" | "h" | "cpp" | "hpp" | "java" | "kt"
-        | "rb" | "php" | "sh" | "bash" | "zsh" | "html" | "css" | "scss" | "json" | "yaml" | "yml"
-        | "toml" | "xml" | "sql" | "lua" | "swift" | "cs" | "vue" | "svelte" | "dockerfile" | "tf"
-        | "nix" => Cat::Code,
+        "zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "zst" | "7z" | "rar" | "deb" | "rpm" | "jar" | "apk" => {
+            Cat::Archive
+        }
+        "rs" | "js" | "ts" | "tsx" | "jsx" | "py" | "go" | "c" | "h" | "cpp" | "hpp" | "java" | "kt" | "rb" | "php"
+        | "sh" | "bash" | "zsh" | "html" | "css" | "scss" | "json" | "yaml" | "yml" | "toml" | "xml" | "sql"
+        | "lua" | "swift" | "cs" | "vue" | "svelte" | "dockerfile" | "tf" | "nix" => Cat::Code,
         "txt" | "md" | "log" | "csv" | "tsv" | "ini" | "conf" | "cfg" | "env" | "rst" | "org" => Cat::Text,
         "pdf" => Cat::Pdf,
         "doc" | "docx" | "docm" | "dot" | "dotx" | "dotm" | "odt" | "ott" | "rtf" | "pages" | "epub" => Cat::Document,
@@ -202,10 +202,10 @@ pub enum PreviewKind {
 
 /// Files without an extension that are almost always plain text.
 const TEXT_NAMES: &[&str] = &[
-    "dockerfile", "containerfile", "makefile", "justfile", "readme", "license", "licence", "copying",
-    "authors", "changelog", "notice", "todo", "procfile", "gemfile", "rakefile", "vagrantfile",
-    ".gitignore", ".gitattributes", ".gitmodules", ".dockerignore", ".editorconfig", ".env",
-    ".bashrc", ".zshrc", ".profile", ".bash_profile", ".npmrc", ".prettierrc", ".eslintrc",
+    "dockerfile", "containerfile", "makefile", "justfile", "readme", "license", "licence", "copying", "authors",
+    "changelog", "notice", "todo", "procfile", "gemfile", "rakefile", "vagrantfile", ".gitignore", ".gitattributes",
+    ".gitmodules", ".dockerignore", ".editorconfig", ".env", ".bashrc", ".zshrc", ".profile", ".bash_profile",
+    ".npmrc", ".prettierrc", ".eslintrc",
 ];
 
 /// The preview a file gets, if the browser can show it. Media and PDFs are
@@ -227,6 +227,7 @@ pub fn preview_kind(e: &Entry) -> Option<PreviewKind> {
         _ => {}
     }
     let name = e.name.to_lowercase();
+    #[rustfmt::skip] // Keeps the extension list packed instead of one per line.
     let texty = matches!(category(e), Cat::Code | Cat::Text)
         || TEXT_NAMES.contains(&name.as_str())
         || matches!(
@@ -240,16 +241,78 @@ pub fn preview_kind(e: &Entry) -> Option<PreviewKind> {
     texty.then_some(PreviewKind::Text)
 }
 
-/// Turn the first bytes of a file into preview text, or `None` if it looks binary.
+/// Turn the first bytes of a file into preview text, or `None` if it looks
+/// binary. Reads UTF-8 and UTF-16 (with or without a byte order mark), and
+/// older 8-bit text as Windows-1252 (as exported by Excel and Outlook).
 pub fn preview_text(bytes: &[u8]) -> Option<String> {
-    if bytes.contains(&0) {
-        return None;
+    let text = decode_text(bytes);
+    // Many control characters or undecodable bytes: binary after all.
+    let bad = text.chars().filter(|&c| c == '\u{FFFD}' || (c.is_control() && !c.is_whitespace())).count();
+    (bad * 20 <= text.chars().count().max(1)).then_some(text)
+}
+
+fn decode_text(bytes: &[u8]) -> String {
+    if let Some(rest) = bytes.strip_prefix(b"\xEF\xBB\xBF") {
+        return utf8_or_cp1252(rest);
     }
-    // The read may have stopped mid-character; drop a broken tail.
-    let s = String::from_utf8_lossy(bytes);
-    let s = s.trim_end_matches('\u{FFFD}');
-    let bad = s.chars().filter(|&c| c == '\u{FFFD}' || (c.is_control() && !c.is_whitespace())).count();
-    (bad * 20 <= s.chars().count().max(1)).then(|| s.to_string())
+    if let Some(rest) = bytes.strip_prefix(b"\xFF\xFE") {
+        return utf16(rest, u16::from_le_bytes);
+    }
+    if let Some(rest) = bytes.strip_prefix(b"\xFE\xFF") {
+        return utf16(rest, u16::from_be_bytes);
+    }
+    // UTF-16 without a byte order mark: Latin characters have a zero byte,
+    // always on the same side (odd offsets when little-endian).
+    let sample = &bytes[..bytes.len().min(4096)];
+    let zeros = |from: usize| sample.iter().skip(from).step_by(2).filter(|&&b| b == 0).count();
+    let (even, odd, half) = (zeros(0), zeros(1), sample.len() / 2);
+    if half > 0 && odd * 5 >= half && even * 50 <= half {
+        return utf16(bytes, u16::from_le_bytes);
+    }
+    if half > 0 && even * 5 >= half && odd * 50 <= half {
+        return utf16(bytes, u16::from_be_bytes);
+    }
+    utf8_or_cp1252(bytes)
+}
+
+/// UTF-8 if it mostly is (a few bad bytes are shown as �), else Windows-1252.
+fn utf8_or_cp1252(bytes: &[u8]) -> String {
+    let err = match std::str::from_utf8(bytes) {
+        Ok(s) => return s.to_string(),
+        Err(e) => e,
+    };
+    // Only the end is broken: the read stopped mid-character.
+    if err.error_len().is_none() {
+        return String::from_utf8_lossy(&bytes[..err.valid_up_to()]).into_owned();
+    }
+    let lossy = String::from_utf8_lossy(bytes);
+    let lossy = lossy.trim_end_matches('\u{FFFD}');
+    let broken = lossy.matches('\u{FFFD}').count();
+    let decoded = lossy.chars().filter(|&c| !c.is_ascii() && c != '\u{FFFD}').count();
+    if decoded > broken {
+        lossy.to_string()
+    } else {
+        bytes.iter().map(|&b| cp1252(b)).collect()
+    }
+}
+
+fn utf16(bytes: &[u8], unit: fn([u8; 2]) -> u16) -> String {
+    let (pairs, _) = bytes.as_chunks::<2>();
+    let text: String = char::decode_utf16(pairs.iter().map(|&p| unit(p))).map(|c| c.unwrap_or('\u{FFFD}')).collect();
+    // The read may have stopped in the middle of a surrogate pair.
+    text.trim_end_matches('\u{FFFD}').to_string()
+}
+
+/// Windows-1252: Latin-1 plus typographic characters in 0x80–0x9F.
+fn cp1252(b: u8) -> char {
+    const HIGH: [char; 32] = [
+        '€', '\u{81}', '‚', 'ƒ', '„', '…', '†', '‡', 'ˆ', '‰', 'Š', '‹', 'Œ', '\u{8d}', 'Ž', '\u{8f}', '\u{90}', '‘',
+        '’', '“', '”', '•', '–', '—', '˜', '™', 'š', '›', 'œ', '\u{9d}', 'ž', 'Ÿ',
+    ];
+    match b {
+        0x80..=0x9F => HIGH[usize::from(b - 0x80)],
+        _ => char::from(b),
+    }
 }
 
 /// Size column text: item count for folders, bytes for files.
@@ -333,9 +396,7 @@ pub fn dropped_entries(dt: &web_sys::DataTransfer) -> Vec<web_sys::FileSystemEnt
 
 /// Walk dropped entries, descending into folders, and return every file
 /// with its relative path. Empty folders are skipped.
-pub async fn read_entries(
-    entries: Vec<web_sys::FileSystemEntry>,
-) -> Result<Vec<(String, web_sys::File)>, String> {
+pub async fn read_entries(entries: Vec<web_sys::FileSystemEntry>) -> Result<Vec<(String, web_sys::File)>, String> {
     use js_sys::{Array, Promise};
     use wasm_bindgen::JsCast;
     use wasm_bindgen_futures::JsFuture;
@@ -413,4 +474,36 @@ pub fn child_on_path(folder: &str, current: &str) -> Option<String> {
     let rest = current.strip_prefix(&prefix)?;
     let seg = rest.split('/').next().filter(|s| !s.is_empty())?;
     Some(format!("{prefix}{seg}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::preview_text;
+
+    #[test]
+    fn text_in_common_encodings_is_previewed() {
+        let csv = "Name,City\nJosé,Zürich\n";
+        let le: Vec<u8> = csv.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let be: Vec<u8> = csv.encode_utf16().flat_map(u16::to_be_bytes).collect();
+        let cp1252: Vec<u8> = csv.chars().map(|c| c as u8).collect();
+        for bytes in [
+            csv.as_bytes().to_vec(),
+            [b"\xEF\xBB\xBF".as_slice(), csv.as_bytes()].concat(),
+            [b"\xFF\xFE".as_slice(), &le].concat(),
+            [b"\xFE\xFF".as_slice(), &be].concat(),
+            le,
+            be,
+            cp1252,
+        ] {
+            assert_eq!(preview_text(&bytes).as_deref(), Some(csv), "{bytes:?}");
+        }
+    }
+
+    #[test]
+    fn cut_off_reads_and_binary_files() {
+        // The read stopped inside "é".
+        assert_eq!(preview_text(&"héllo".as_bytes()[..2]).as_deref(), Some("h"));
+        let png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\x01\0\0\0\x01\0\x08\x06\0\0\0\x1f\x15\xc4\x89";
+        assert_eq!(preview_text(png), None);
+    }
 }

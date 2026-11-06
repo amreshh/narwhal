@@ -78,8 +78,14 @@ pub fn trash_menu(st: AppState, i: usize) -> AnyView {
     let sel2 = sel.clone();
     view! {
         {(n > 0).then(|| mi(st, "Restore", "", icons::RESTORE, move || st.restore(sel.clone())))}
-        {(n > 0).then(|| mi(st, "Delete Permanently", "Del", icons::TRASH,
-            move || st.dialog.set(Some(Dialog::ConfirmPurge(sel2.clone())))))}
+        {(n > 0)
+            .then(|| mi(
+                st,
+                "Delete Permanently",
+                "Del",
+                icons::TRASH,
+                move || st.dialog.set(Some(Dialog::ConfirmPurge(sel2.clone()))),
+            ))}
         {(n > 0).then(|| view! { <div class="msep"></div> })}
         {mi(st, "Select All", "Ctrl+A", icons::SELECT_ALL, move || select_all(st, i))}
         {mi(st, "Refresh", "F5", icons::REFRESH, move || st.refresh_all())}
@@ -103,37 +109,42 @@ pub fn TrashView(idx: usize) -> impl IntoView {
         Some(Ok(v)) => v
             .into_iter()
             .enumerate()
-            .map(|(pos, item)| view! { <TrashRow idx=idx pos=pos item=item/> })
+            .map(|(pos, item)| view! { <TrashRow idx=idx pos=pos item=item /> })
             .collect_view()
             .into_any(),
     };
 
     view! {
         <div class="trashhead" on:click=|ev: ev::MouseEvent| ev.stop_propagation()>
-        <div class="trashbar">
-            <span class="hint">"Items here can be restored to where they were deleted from."</span>
-            <div class="spacer"></div>
-            <button class="btn" disabled=move || !has_sel()
-                on:click=move |_| st.restore(selected_ids(st, idx))>
-                <span class="ic" inner_html=icons::RESTORE></span>"Restore"
-            </button>
-            <button class="btn" disabled=move || !has_sel()
-                on:click=move |_| st.ask_delete(idx, true)>
-                <span class="ic" inner_html=icons::TRASH></span>"Delete Permanently"
-            </button>
-            <button class="btn" disabled=move || !has_items()
-                on:click=move |_| st.dialog.set(Some(Dialog::ConfirmEmptyTrash))>
-                "Empty Trash"
-            </button>
+            <div class="trashbar">
+                <span class="hint">"Items here can be restored to where they were deleted from."</span>
+                <div class="spacer"></div>
+                <button class="btn" disabled=move || !has_sel() on:click=move |_| st.restore(selected_ids(st, idx))>
+                    <span class="ic" inner_html=icons::RESTORE></span>
+                    "Restore"
+                </button>
+                <button class="btn" disabled=move || !has_sel() on:click=move |_| st.ask_delete(idx, true)>
+                    <span class="ic" inner_html=icons::TRASH></span>
+                    "Delete Permanently"
+                </button>
+                <button
+                    class="btn"
+                    disabled=move || !has_items()
+                    on:click=move |_| st.dialog.set(Some(Dialog::ConfirmEmptyTrash))
+                >
+                    "Empty Trash"
+                </button>
+            </div>
+            <div class="dheader trash">
+                <span class="hcol name">"Name"</span>
+                <span class="hcol where">"Original Location"</span>
+                <span class="hcol date">"Deleted"</span>
+                <span class="hcol size">"Size"</span>
+            </div>
         </div>
-        <div class="dheader trash">
-            <span class="hcol name">"Name"</span>
-            <span class="hcol where">"Original Location"</span>
-            <span class="hcol date">"Deleted"</span>
-            <span class="hcol size">"Size"</span>
+        <div class="rows trash" role="grid">
+            {rows}
         </div>
-        </div>
-        <div class="rows trash" role="grid">{rows}</div>
     }
 }
 
@@ -143,9 +154,8 @@ fn TrashRow(idx: usize, pos: usize, item: TrashItem) -> impl IntoView {
     let p = st.panes[idx];
     let id = StoredValue::new(item.id.clone());
     let selected = move || id.with_value(|id| p.selected.with(|s| s.contains(id)));
-    let is_cursor = move || {
-        st.active.get() == idx && id.with_value(|id| p.cursor.with(|c| c.as_deref() == Some(id.as_str())))
-    };
+    let is_cursor =
+        move || st.active.get() == idx && id.with_value(|id| p.cursor.with(|c| c.as_deref() == Some(id.as_str())));
 
     let on_click = move |ev: ev::MouseEvent| {
         ev.stop_propagation();
@@ -181,15 +191,34 @@ fn TrashRow(idx: usize, pos: usize, item: TrashItem) -> impl IntoView {
 
     let e = &item.entry;
     let origin = vparent(&e.path);
-    let origin_label = if origin == "/" { st.info.with_untracked(|i| i.as_ref().map(|i| i.name.clone())).unwrap_or("/".into()) } else { origin.clone() };
+    let origin_label = if origin == "/" {
+        st.info.with_untracked(|i| i.as_ref().map(|i| i.name.clone())).unwrap_or("/".into())
+    } else {
+        origin.clone()
+    };
     view! {
-        <div class="item" role="gridcell" class:selected=selected class:cursor=is_cursor class:dim={e.hidden}
+        <div
+            class="item"
+            role="gridcell"
+            class:selected=selected
+            class:cursor=is_cursor
+            class:dim={e.hidden}
             aria-selected=move || if selected() { "true" } else { "false" }
-            data-pos=pos.to_string() title=format!("{} — double-click to restore", e.path)
-            on:click=on_click on:dblclick=on_dbl on:contextmenu=on_menu>
-            <div class="icon"><span class="fi-wrap" inner_html=icons::file_icon(e)></span></div>
-            <div class="label"><span class="name">{e.name.clone()}</span></div>
-            <span class="col where" title=origin>{origin_label}</span>
+            data-pos=pos.to_string()
+            title=format!("{} — double-click to restore", e.path)
+            on:click=on_click
+            on:dblclick=on_dbl
+            on:contextmenu=on_menu
+        >
+            <div class="icon">
+                <span class="fi-wrap" inner_html=icons::file_icon(e)></span>
+            </div>
+            <div class="label">
+                <span class="name">{e.name.clone()}</span>
+            </div>
+            <span class="col where" title=origin>
+                {origin_label}
+            </span>
             <span class="col date">{format_date(item.deleted)}</span>
             <span class="col size">{size_text(e)}</span>
         </div>

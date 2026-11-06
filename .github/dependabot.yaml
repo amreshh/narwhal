@@ -1,23 +1,49 @@
 # Dependabot version updates. Only read from the default branch (main);
-# PRs are opened against dev. Security-fix PRs would ignore target-branch and
-# go to main, so "Dependabot security updates" is turned off in the repo
-# settings (alerts stay on): these version updates bump vulnerable deps too.
+# PRs are opened against dev.
+#
+# "Dependabot security updates" is also on in the repo settings: when a
+# dependency gets a vulnerability with a fix, a PR opens right away, without
+# the cooldown below. Those PRs always target main (they ignore
+# target-branch); the ci workflow checks and builds them there. Sync dev with
+# main after merging one.
 version: 2
 updates:
+  # New releases wait a week before they're proposed, so a compromised one
+  # is usually pulled before it reaches this repo. Security fixes don't wait:
+  # they come from the security updates above.
   - package-ecosystem: cargo
     directory: /            # workspace root: shared, server, frontend + Cargo.lock
     target-branch: dev
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     groups:
       cargo-minor-patch:
         update-types: [minor, patch]
 
+  # Workflow actions are pinned to commits; this updates the commit and the
+  # version comment next to it.
   - package-ecosystem: github-actions
     directory: /
     target-branch: dev
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     groups:
       actions:
+        patterns: ["*"]
+
+  # The Dockerfile's base images (Rust builder, distroless runtime), pinned
+  # by digest: new Rust versions and rebuilt images with security fixes.
+  # No cooldown: those fixes shouldn't wait, and the ci workflow
+  # scans the image before pushing it.
+  - package-ecosystem: docker # zizmor: ignore[dependabot-cooldown]
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: weekly
+    groups:
+      base-images:
         patterns: ["*"]

@@ -28,3 +28,6 @@ socket2 = { version = "0.6", features = ["all"] }
 
 [dev-dependencies]
 tempfile = "3"
+
+[lints]
+workspace = true

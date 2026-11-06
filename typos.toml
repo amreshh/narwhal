@@ -1,0 +1,15 @@
+# Spell check (crate-ci/typos). Words and patterns that look like typos but aren't.
+
+[default]
+extend-ignore-re = [
+    # A deliberately invalid setting value, in the docs and a test.
+    "READ_ONLY=ture",
+    # XSL-FO attributes in OpenDocument files (fo:font-weight, …).
+    "\\bfo:[a-z-]+",
+    # A base64 test vector.
+    'b"fo"',
+]
+
+[default.extend-words]
+odf = "odf"       # OpenDocument Format
+wronly = "wronly" # O_WRONLY

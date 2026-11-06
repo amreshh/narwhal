@@ -18,8 +18,8 @@ use crate::{
     util::{self, format_date, format_size, size_text, type_label, PreviewKind},
 };
 use leptos::{ev, html, prelude::*, task::spawn_local};
-use wasm_bindgen::JsCast;
 use narwhal_shared::Entry;
+use wasm_bindgen::JsCast;
 
 #[component]
 pub fn ColumnsView(idx: usize) -> impl IntoView {
@@ -33,9 +33,7 @@ pub fn ColumnsView(idx: usize) -> impl IntoView {
             return None;
         }
         let path = p.path.get();
-        st.column_entries(idx, &path)
-            .and_then(|r| r.ok())
-            .and_then(|v| v.into_iter().find(|e| sel.contains(&e.path)))
+        st.column_entries(idx, &path).and_then(|r| r.ok()).and_then(|v| v.into_iter().find(|e| sel.contains(&e.path)))
     });
     let folders = Memo::new(move |_| {
         let mut f = util::ancestors(&p.path.get());
@@ -64,14 +62,9 @@ pub fn ColumnsView(idx: usize) -> impl IntoView {
             <For
                 each=move || folders.get()
                 key=|f| f.clone()
-                children=move |folder: String| view! { <Column idx=idx folder=folder/> }
+                children=move |folder: String| view! { <Column idx=idx folder=folder /> }
             />
-            {move || {
-                picked
-                    .get()
-                    .filter(|e| !e.is_dir())
-                    .map(|e| view! { <FilePreview idx=idx entry=e/> })
-            }}
+            {move || { picked.get().filter(|e| !e.is_dir()).map(|e| view! { <FilePreview idx=idx entry=e /> }) }}
         </div>
     }
 }
@@ -89,9 +82,8 @@ fn drop_handlers(
         if !enabled {
             return; // Bubble to the column.
         }
-        let onto_self = dest.with_value(|d| {
-            st.dragging.with_untracked(|g| g.as_ref().map(|g| g.contains(d)).unwrap_or(false))
-        });
+        let onto_self =
+            dest.with_value(|d| st.dragging.with_untracked(|g| g.as_ref().map(|g| g.contains(d)).unwrap_or(false)));
         if onto_self {
             return;
         }
@@ -173,20 +165,29 @@ fn Column(idx: usize, folder: String) -> impl IntoView {
         Some(Ok(v)) => v
             .into_iter()
             .enumerate()
-            .map(|(pos, entry)| view! { <ColumnRow idx=idx folder=f trail=trail pos=pos entry=entry/> })
+            .map(|(pos, entry)| view! { <ColumnRow idx=idx folder=f trail=trail pos=pos entry=entry /> })
             .collect_view()
             .into_any(),
     };
 
     let col = NodeRef::<html::Div>::new();
     view! {
-        <div class="column" class:current=is_current class:droptarget=is_drop node_ref=col
-            role="group" aria-label=folder.clone()
+        <div
+            class="column"
+            class:current=is_current
+            class:droptarget=is_drop
+            node_ref=col
+            role="group"
+            aria-label=folder.clone()
             style=move || f.with_value(|f| format!("--colw:{}px", st.column_width(f)))
-            on:click=on_click on:contextmenu=on_menu on:dragover=on_dragover on:drop=on_drop>
+            on:click=on_click
+            on:contextmenu=on_menu
+            on:dragover=on_dragover
+            on:drop=on_drop
+        >
             {rows}
         </div>
-        <ColumnSplitter folder=f col=col/>
+        <ColumnSplitter folder=f col=col />
     }
 }
 
@@ -253,13 +254,22 @@ fn ColumnSplitter(folder: StoredValue<String>, col: NodeRef<html::Div>) -> impl 
     };
 
     view! {
-        <div class="colsplit" class:dragging=move || dragging.get()
-            role="separator" aria-orientation="vertical" tabindex="0"
+        <div
+            class="colsplit"
+            class:dragging=move || dragging.get()
+            role="separator"
+            aria-orientation="vertical"
+            tabindex="0"
             aria-valuenow=move || folder.with_value(|f| st.column_width(f).to_string())
             title="Drag to resize · Alt+drag: all columns · Double-click: fit names"
-            on:pointerdown=on_down on:pointermove=on_move on:pointerup=on_up on:pointercancel=on_up
+            on:pointerdown=on_down
+            on:pointermove=on_move
+            on:pointerup=on_up
+            on:pointercancel=on_up
             on:click=|ev: ev::MouseEvent| ev.stop_propagation()
-            on:dblclick=on_dbl on:keydown=on_key></div>
+            on:dblclick=on_dbl
+            on:keydown=on_key
+        ></div>
     }
 }
 
@@ -280,15 +290,15 @@ fn ColumnRow(
     let selected = move || is_current() && path.with_value(|x| p.selected.with(|s| s.contains(x)));
     let on_trail = move || path.with_value(|x| trail.with(|t| t.as_deref() == Some(x.as_str())));
     let is_cursor = move || {
-        is_current() && st.active.get() == idx && path.with_value(|x| p.cursor.with(|c| c.as_deref() == Some(x.as_str())))
+        is_current()
+            && st.active.get() == idx
+            && path.with_value(|x| p.cursor.with(|c| c.as_deref() == Some(x.as_str())))
     };
-    let is_cut = move || {
-        path.with_value(|x| st.clip.with(|c| c.as_ref().is_some_and(|c| c.cut && c.paths.contains(x))))
-    };
+    let is_cut =
+        move || path.with_value(|x| st.clip.with(|c| c.as_ref().is_some_and(|c| c.cut && c.paths.contains(x))));
     let is_drop = move || path.with_value(|x| st.drop_target.with(|d| d.as_deref() == Some(x.as_str())));
-    let renaming = move || {
-        path.with_value(|x| st.renaming.with(|r| matches!(r, Some((i, rp)) if *i == idx && rp == x)))
-    };
+    let renaming =
+        move || path.with_value(|x| st.renaming.with(|r| matches!(r, Some((i, rp)) if *i == idx && rp == x)));
 
     let on_click = move |ev: ev::MouseEvent| {
         ev.stop_propagation();
@@ -347,22 +357,33 @@ fn ColumnRow(
     let name = entry.name.clone();
     let label = move || {
         if renaming() {
-            view! { <RenameBox idx=idx path=path.get_value() name=name.clone()/> }.into_any()
+            view! { <RenameBox idx=idx path=path.get_value() name=name.clone() /> }.into_any()
         } else {
             view! { <span class="cname">{name.clone()}</span> }.into_any()
         }
     };
 
     view! {
-        <div class="crow" role="treeitem"
-            class:selected=selected class:trail=on_trail class:cursor=is_cursor class:cut=is_cut
-            class:droptarget=is_drop class:dim={entry.hidden}
+        <div
+            class="crow"
+            role="treeitem"
+            class:selected=selected
+            class:trail=on_trail
+            class:cursor=is_cursor
+            class:cut=is_cut
+            class:droptarget=is_drop
+            class:dim={entry.hidden}
             aria-selected=move || if selected() || on_trail() { "true" } else { "false" }
             data-pos=move || is_current().then(|| pos.to_string())
             title=entry.path.clone()
             draggable=move || if renaming() { "false" } else { "true" }
-            on:click=on_click on:dblclick=on_dbl on:contextmenu=on_menu
-            on:dragstart=on_dragstart on:dragover=on_dragover on:drop=on_drop>
+            on:click=on_click
+            on:dblclick=on_dbl
+            on:contextmenu=on_menu
+            on:dragstart=on_dragstart
+            on:dragover=on_dragover
+            on:drop=on_drop
+        >
             <span class="cicon" inner_html=icons::file_icon(&entry)></span>
             {label}
             {is_dir.then(|| view! { <span class="chev ic" inner_html=icons::CHEVRON></span> })}
@@ -383,9 +404,16 @@ fn FilePreview(idx: usize, entry: Entry) -> impl IntoView {
     let icon = || view! { <span class="fi-wrap" inner_html=icons::file_icon(&entry)></span> };
     let wide = matches!(kind, Some(PreviewKind::Video | PreviewKind::Pdf | PreviewKind::Text | PreviewKind::Office));
     let big = match kind {
-        Some(PreviewKind::Image) => view! { <div class="big"><img src=url alt="" draggable="false"/></div> }.into_any(),
+        Some(PreviewKind::Image) => view! {
+            <div class="big">
+                <img src=url alt="" draggable="false" />
+            </div>
+        }
+        .into_any(),
         Some(PreviewKind::Video) => view! {
-            <div class="big media"><video src=url controls preload="metadata"></video></div>
+            <div class="big media">
+                <video src=url controls preload="metadata"></video>
+            </div>
         }
         .into_any(),
         Some(PreviewKind::Audio) => view! {
@@ -394,11 +422,18 @@ fn FilePreview(idx: usize, entry: Entry) -> impl IntoView {
         }
         .into_any(),
         Some(PreviewKind::Pdf) => view! {
-            <div class="big media"><iframe class="pdf" src=url title="PDF preview"></iframe></div>
+            <div class="big media">
+                <iframe class="pdf" src=url title="PDF preview"></iframe>
+            </div>
         }
         .into_any(),
-        Some(PreviewKind::Text) => view! { <TextPreview entry=entry.clone() limit=TEXT_PREVIEW_BYTES/> }.into_any(),
-        Some(PreviewKind::Office) => view! { <div class="obox"><OfficePreview entry=entry.clone()/></div> }.into_any(),
+        Some(PreviewKind::Text) => view! { <TextPreview entry=entry.clone() limit=TEXT_PREVIEW_BYTES /> }.into_any(),
+        Some(PreviewKind::Office) => view! {
+            <div class="obox">
+                <OfficePreview entry=entry.clone() />
+            </div>
+        }
+        .into_any(),
         None => view! { <div class="big">{icon()}</div> }.into_any(),
     };
     let size = format!("{} ({} bytes)", format_size(entry.size), entry.size);
@@ -408,23 +443,32 @@ fn FilePreview(idx: usize, entry: Entry) -> impl IntoView {
     let dl_entry = entry.clone();
 
     view! {
-        <aside class="preview" class:wide=wide aria-label="Preview"
+        <aside
+            class="preview"
+            class:wide=wide
+            aria-label="Preview"
             on:click=|ev: ev::MouseEvent| ev.stop_propagation()
-            on:contextmenu=|ev: ev::MouseEvent| ev.stop_propagation()>
+            on:contextmenu=|ev: ev::MouseEvent| ev.stop_propagation()
+        >
             {big}
             <h3>{entry.name.clone()}</h3>
             <div class="muted">{type_label(&entry)}{" — "}{size_text(&entry)}</div>
             <dl>
-                <dt>"Size"</dt><dd>{size}</dd>
-                <dt>"Modified"</dt><dd>{modified}</dd>
-                <dt>"Permissions"</dt><dd class="mono">{perms}</dd>
+                <dt>"Size"</dt>
+                <dd>{size}</dd>
+                <dt>"Modified"</dt>
+                <dd>{modified}</dd>
+                <dt>"Permissions"</dt>
+                <dd class="mono">{perms}</dd>
             </dl>
             <div class="actions">
                 <button class="btn" on:click=move |_| st.open(idx, &open_entry)>
-                    <span class="ic" inner_html=icons::OPEN></span>"Open"
+                    <span class="ic" inner_html=icons::OPEN></span>
+                    "Open"
                 </button>
                 <button class="btn" on:click=move |_| st.download(std::slice::from_ref(&dl_entry))>
-                    <span class="ic" inner_html=icons::DOWNLOAD></span>"Download"
+                    <span class="ic" inner_html=icons::DOWNLOAD></span>
+                    "Download"
                 </button>
             </div>
         </aside>
@@ -452,9 +496,6 @@ pub(crate) fn TextPreview(entry: Entry, limit: u64) -> impl IntoView {
         None => view! { <pre class="textprev muted">"Loading…"</pre> }.into_any(),
         Some(Err(e)) => view! { <div class="col-note">{e}</div> }.into_any(),
         Some(Ok(t)) if t.is_empty() => view! { <div class="col-note">"Empty file"</div> }.into_any(),
-        Some(Ok(t)) => view! {
-            <pre class="textprev">{t}{cut.then_some("\n…")}</pre>
-        }
-        .into_any(),
+        Some(Ok(t)) => view! { <pre class="textprev">{t}{cut.then_some("\n…")}</pre> }.into_any(),
     }
 }

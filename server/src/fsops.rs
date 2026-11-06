@@ -8,8 +8,8 @@
 use crate::confined::{self, Dir, Found, Meta, Root};
 use crate::error::{ApiError, ApiResult};
 use narwhal_shared::{
-    vjoin, vname, CreateReq, DiskInfo, Entry, EntryKind, Listing, OpReport, Place, RenameReq,
-    SizeReport, TransferOp, TransferReq,
+    vjoin, vname, CreateReq, DiskInfo, Entry, EntryKind, Listing, OpReport, Place, RenameReq, SizeReport, TransferOp,
+    TransferReq,
 };
 use rustix::fs::FileType;
 use rustix::io::Errno;
@@ -119,11 +119,7 @@ pub(crate) fn check_name(raw: &str) -> ApiResult<String> {
 /// for folder uploads) into its folders and its file name. Every component
 /// is validated, so `..` and the like are refused.
 pub fn split_upload_path(rel: &str) -> ApiResult<(Vec<String>, String)> {
-    let mut parts = rel
-        .split('/')
-        .filter(|p| !p.is_empty())
-        .map(check_name)
-        .collect::<ApiResult<Vec<_>>>()?;
+    let mut parts = rel.split('/').filter(|p| !p.is_empty()).map(check_name).collect::<ApiResult<Vec<_>>>()?;
     let name = parts.pop().ok_or_else(|| ApiError::bad_request("Invalid name"))?;
     Ok((parts, name))
 }
@@ -663,10 +659,7 @@ pub fn size_of(root: &Root, virt: &str) -> ApiResult<SizeReport> {
 
 pub fn disk_info(root: &Root) -> Option<DiskInfo> {
     let s = rustix::fs::fstatvfs(root.dir()).ok()?;
-    Some(DiskInfo {
-        total: s.f_blocks.saturating_mul(s.f_frsize),
-        available: s.f_bavail.saturating_mul(s.f_frsize),
-    })
+    Some(DiskInfo { total: s.f_blocks.saturating_mul(s.f_frsize), available: s.f_bavail.saturating_mul(s.f_frsize) })
 }
 
 /// Sidebar places: configured ones if any, otherwise the root plus its
@@ -886,8 +879,7 @@ mod tests {
         let (_t, path, root) = setup();
         symlink("docs", path.join("link")).unwrap();
         for op in [TransferOp::Copy, TransferOp::Move] {
-            let r = transfer(&root, &TransferReq { paths: vec!["/docs".into()], dest: "/link".into(), op })
-                .unwrap();
+            let r = transfer(&root, &TransferReq { paths: vec!["/docs".into()], dest: "/link".into(), op }).unwrap();
             assert_eq!((r.done, r.errors.len()), (0, 1), "{op:?} into itself via a link must fail");
         }
         let r = transfer(
@@ -1025,7 +1017,8 @@ mod tests {
     #[test]
     fn upload_dirs_stay_inside_root() {
         let (_t, path, root) = setup();
-        let same = |d: &Dir, p: &str| d.stat().unwrap().same_file(&Dir::open_path(&path.join(p)).unwrap().stat().unwrap());
+        let same =
+            |d: &Dir, p: &str| d.stat().unwrap().same_file(&Dir::open_path(&path.join(p)).unwrap().stat().unwrap());
         let d = make_dirs(&root, "/docs", &["new".into(), "deep".into()]).unwrap();
         assert!(same(&d, "docs/new/deep"));
         // Existing folders are reused, also through a link inside the root.

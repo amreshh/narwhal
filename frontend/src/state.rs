@@ -1,10 +1,10 @@
 //! Application state (all reactive signals) and the actions that mutate it.
 
-use crate::{api, util};
 pub use crate::upload::FileState;
+use crate::{api, util};
 use leptos::{html, prelude::*, task::spawn_local};
-use serde::{Deserialize, Serialize};
 use narwhal_shared::{vname, vparent, Entry, Info, OpReport, TransferOp, TrashItem};
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use wasm_bindgen::JsCast;
@@ -127,16 +127,28 @@ impl Upload {
         self.files.iter().all(|f| f.dest == first).then_some(first)
     }
 
-    /// "photo.jpg", "Holiday (141 files)" or "141 files".
-    pub fn label(&self) -> String {
+    /// What the upload is called, and how many of its files are left:
+    /// ("photo.jpg", None), ("Holiday", "97 of 141 files left") or
+    /// ("141 files", "97 left").
+    pub fn label(&self) -> (String, Option<String>) {
         let top = |f: &UpFile| f.rel.split('/').next().unwrap_or("").to_string();
+        let (n, left) = (self.files.len(), self.left());
         match self.files.as_slice() {
-            [one] => vname(&one.rel).to_string(),
-            [first, ..] if self.dest().is_some() && first.rel.contains('/') && self.files.iter().all(|f| top(f) == top(first)) => {
-                format!("{} ({} files)", top(first), self.files.len())
+            [one] => (vname(&one.rel).to_string(), None),
+            [first, ..]
+                if self.dest().is_some()
+                    && first.rel.contains('/')
+                    && self.files.iter().all(|f| top(f) == top(first)) =>
+            {
+                (top(first), Some(format!("{left} of {n} files left")))
             }
-            files => format!("{} files", files.len()),
+            _ => (format!("{n} files"), Some(format!("{left} left"))),
         }
+    }
+
+    /// Files not finished yet (not uploaded, failed or cancelled).
+    pub fn left(&self) -> usize {
+        self.states.iter().filter(|s| s.is_pending()).count()
     }
 
     pub fn progress(&self) -> f64 {
@@ -673,7 +685,8 @@ impl AppState {
             self.navigate(i, e.path.clone());
         } else {
             // noopener: the opened file gets no handle on this page.
-            let _ = window().open_with_url_and_target_and_features(&api::download_url(&e.path, true), "_blank", "noopener");
+            let _ =
+                window().open_with_url_and_target_and_features(&api::download_url(&e.path, true), "_blank", "noopener");
         }
     }
 
@@ -836,9 +849,8 @@ impl AppState {
         let path = dir.path.clone();
         self.navigate(i, path.clone());
         let st = *self;
-        let first = untrack(move || st.column_entries(i, &path))
-            .and_then(|r| r.ok())
-            .and_then(|v| v.into_iter().next());
+        let first =
+            untrack(move || st.column_entries(i, &path)).and_then(|r| r.ok()).and_then(|v| v.into_iter().next());
         if let Some(first) = first {
             self.select_only(i, &first.path);
         }
@@ -1065,7 +1077,9 @@ impl AppState {
         let st = *self;
         spawn_local(async move {
             match api::trash_purge(ids).await {
-                Ok(rep) => st.report(&rep, Some(format!("Deleted {}", util::plural(rep.done as usize, "item", "items")))),
+                Ok(rep) => {
+                    st.report(&rep, Some(format!("Deleted {}", util::plural(rep.done as usize, "item", "items"))))
+                }
                 Err(e) => st.error(e),
             }
             st.refresh_all();
@@ -1211,8 +1225,7 @@ impl AppState {
         let copy = ev.ctrl_key();
         if let Some(paths) = self.dragging.get_untracked() {
             self.dragging.set(None);
-            let paths: Vec<String> =
-                paths.into_iter().filter(|p| *p != dest && (copy || vparent(p) != dest)).collect();
+            let paths: Vec<String> = paths.into_iter().filter(|p| *p != dest && (copy || vparent(p) != dest)).collect();
             let op = if copy { TransferOp::Copy } else { TransferOp::Move };
             self.transfer(paths, dest, op);
             return;
@@ -1336,9 +1349,9 @@ pub fn sort_entries(v: &mut [Entry], key: SortKey, asc: bool) {
                     sa.cmp(&sb).then_with(|| util::natural_cmp(&a.name, &b.name))
                 }
                 SortKey::Modified => a.modified.cmp(&b.modified),
-                SortKey::Type => util::type_label(a)
-                    .cmp(&util::type_label(b))
-                    .then_with(|| util::natural_cmp(&a.name, &b.name)),
+                SortKey::Type => {
+                    util::type_label(a).cmp(&util::type_label(b)).then_with(|| util::natural_cmp(&a.name, &b.name))
+                }
             };
             if asc {
                 o

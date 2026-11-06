@@ -56,3 +56,6 @@ features = [
   "XmlHttpRequest",
   "XmlHttpRequestUpload",
 ]
+
+[lints]
+workspace = true

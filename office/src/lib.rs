@@ -96,6 +96,7 @@ impl std::error::Error for Error {}
 
 /// Whether files with this extension (lower case, no dot) are office
 /// documents that `parse` may read.
+#[rustfmt::skip] // One line per kind of document.
 pub fn handles(ext: &str) -> bool {
     matches!(
         ext,
@@ -262,7 +263,10 @@ mod tests {
         for b in [para(""), para("a"), para(""), para(""), para("b"), para("")] {
             d.push(b);
         }
-        assert_eq!(d.finish(), Preview::Document { blocks: vec![para("a"), Block::Paragraph(vec![]), para("b")], cut: false });
+        assert_eq!(
+            d.finish(),
+            Preview::Document { blocks: vec![para("a"), Block::Paragraph(vec![]), para("b")], cut: false }
+        );
     }
 
     #[test]
@@ -295,7 +299,8 @@ mod tests {
 #[ignore]
 fn samples() {
     let dir = std::env::var("OFFICE_SAMPLES").expect("set OFFICE_SAMPLES to a folder of documents");
-    let mut paths: Vec<_> = std::fs::read_dir(dir).unwrap().flatten().map(|e| e.path()).filter(|p| p.is_file()).collect();
+    let mut paths: Vec<_> =
+        std::fs::read_dir(dir).unwrap().flatten().map(|e| e.path()).filter(|p| p.is_file()).collect();
     paths.sort();
     for path in paths {
         let data = std::fs::read(&path).unwrap();
@@ -313,7 +318,13 @@ fn samples() {
             }
             Ok(Preview::Sheets(sheets)) => {
                 for s in &sheets {
-                    println!("  sheet {:?}: {} rows x {}, cut {}", s.name, s.rows.len(), s.rows.first().map_or(0, Vec::len), s.cut);
+                    println!(
+                        "  sheet {:?}: {} rows x {}, cut {}",
+                        s.name,
+                        s.rows.len(),
+                        s.rows.first().map_or(0, Vec::len),
+                        s.cut
+                    );
                     for r in s.rows.iter().take(6) {
                         println!("    {:?}", r.iter().take(8).collect::<Vec<_>>());
                     }

@@ -271,10 +271,8 @@ pub fn expire(root: &Root, days: u64) -> OpReport {
     let Ok(Some((_, info))) = dirs(root, false) else { return OpReport::default() };
     let age = i64::try_from(days).unwrap_or(i64::MAX).saturating_mul(86_400);
     let cutoff = now().saturating_sub(age);
-    let old: Vec<String> = ids(&info)
-        .into_iter()
-        .filter(|id| read_meta(&info, id).map(|m| m.deleted < cutoff).unwrap_or(false))
-        .collect();
+    let old: Vec<String> =
+        ids(&info).into_iter().filter(|id| read_meta(&info, id).map(|m| m.deleted < cutoff).unwrap_or(false)).collect();
     purge(root, &old)
 }
 
