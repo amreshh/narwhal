@@ -1,6 +1,6 @@
 # actionlint settings: https://github.com/rhysd/actionlint/blob/main/docs/config.md
 paths:
-  .github/workflows/ci.yaml:
+  .github/workflows/*.yaml:
     ignore:
       # GitHub's self-repository syntax for workflows and actions in this repo
       # (uses: $/...), which zizmor asks for, is newer than actionlint 1.7.12.

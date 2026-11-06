@@ -119,6 +119,7 @@ Every push and pull request runs one pipeline, `ci`:
 | `lint` | rustfmt + leptosfmt, clippy, typos, actionlint, hadolint, kubeconform |
 | `security` | zizmor (workflow security); also weekly. CodeQL runs through GitHub's default setup |
 | `fuzz` | Fuzzes the document readers: a minute per target in `ci`, 10 minutes weekly |
+| `image scan` | Scans the latest released image daily, so newly published vulnerabilities show up; fails (GitHub emails you) on fixable HIGH/CRITICAL ones |
 
 Reports from Trivy, zizmor and hadolint go to Security → Code scanning. Actions
 are pinned to commits and the Dockerfile's base images to digests; Dependabot
