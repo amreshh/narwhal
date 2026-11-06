@@ -152,6 +152,14 @@ fn on_key(st: AppState, ev: web_sys::KeyboardEvent) {
     if st.quicklook.get_untracked() && !(quicklook::keeps_open(&key) && !ctrl && !alt) {
         st.quicklook.set(false);
     }
+    // In Quick Look the arrows go to the previous/next item, in every view.
+    if st.quicklook.get_untracked() {
+        if let Some(delta) = quicklook::arrow_step(&key) {
+            st.move_cursor(i, delta, shift);
+            ev.prevent_default();
+            return;
+        }
+    }
 
     if st.in_trash(i) {
         let handled = match (key.as_str(), ctrl, alt) {
@@ -1386,7 +1394,7 @@ fn ShortcutsDialog() -> impl IntoView {
         ("Arrows, Home, End", "Move selection (Shift extends)"),
         ("Ctrl+A", "Select all"),
         ("Ctrl+C / Ctrl+X / Ctrl+V", "Copy / cut / paste"),
-        ("Space", "Quick Look: large preview (arrows move on)"),
+        ("Space", "Quick Look: large preview (arrows show the previous/next item)"),
         ("F2", "Rename"),
         ("Delete", "Move to the Trash"),
         ("Shift+Delete", "Delete permanently"),

@@ -1,6 +1,6 @@
 //! Quick Look: Space shows the selected item large, like in Finder. While
-//! it is open the arrow keys keep moving the selection, and the preview
-//! follows.
+//! it is open the arrow keys go to the previous (← ↑) or next (→ ↓) item in
+//! every view, and the preview follows.
 
 use crate::{
     api,
@@ -20,6 +20,17 @@ const TEXT_BYTES: u64 = 512 * 1024;
 /// Keys that keep Quick Look open (they move the selection).
 pub fn keeps_open(key: &str) -> bool {
     matches!(key, "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight" | "Home" | "End" | "PageUp" | "PageDown")
+}
+
+/// How far an arrow key moves while Quick Look is open: one item back or
+/// forward, whatever the view. Without this, ← and → would leave or enter
+/// folders in the column view and do nothing in the details view.
+pub fn arrow_step(key: &str) -> Option<i64> {
+    match key {
+        "ArrowLeft" | "ArrowUp" => Some(-1),
+        "ArrowRight" | "ArrowDown" => Some(1),
+        _ => None,
+    }
 }
 
 /// The item Quick Look shows in pane `i`: the cursor item if it is
