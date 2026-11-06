@@ -32,7 +32,7 @@ pub fn OfficePreview(entry: Entry) -> impl IntoView {
         Some(Err(e)) => view! { <div class="col-note">{e}</div> }.into_any(),
         Some(Ok(p)) => match &*p {
             Preview::Document { blocks, cut } => document(blocks, *cut),
-            Preview::Sheets(_) => view! { <Sheets preview=p.clone()/> }.into_any(),
+            Preview::Sheets(_) => view! { <Sheets preview=p.clone() /> }.into_any(),
             Preview::Slides { slides, cut } => presentation(slides, *cut),
         },
     }
@@ -41,7 +41,13 @@ pub fn OfficePreview(entry: Entry) -> impl IntoView {
 fn spans(spans: &[Span]) -> AnyView {
     spans
         .iter()
-        .map(|s| view! { <span class:b={s.bold} class:i={s.italic} class:u={s.underline}>{s.text.clone()}</span> })
+        .map(|s| {
+            view! {
+                <span class:b={s.bold} class:i={s.italic} class:u={s.underline}>
+                    {s.text.clone()}
+                </span>
+            }
+        })
         .collect_view()
         .into_any()
 }
@@ -71,15 +77,21 @@ fn document(blocks: &[Block], cut: bool) -> AnyView {
         .map(|b| match b {
             Block::Heading(level, s) => heading(*level, s),
             Block::Paragraph(s) => view! { <p>{spans(s)}</p> }.into_any(),
-            Block::ListItem(level, s) => {
-                view! { <p class="oli" style=format!("--lvl:{level}")>{spans(s)}</p> }.into_any()
+            Block::ListItem(level, s) => view! {
+                <p class="oli" style=format!("--lvl:{level}")>
+                    {spans(s)}
+                </p>
             }
+            .into_any(),
             Block::Table(rows) => view! {
                 <table class="otable">
                     <tbody>
-                        {rows.iter().map(|r| view! {
-                            <tr>{r.iter().map(|c| view! { <td>{c.clone()}</td> }).collect_view()}</tr>
-                        }).collect_view()}
+                        {rows
+                            .iter()
+                            .map(|r| {
+                                view! { <tr>{r.iter().map(|c| view! { <td>{c.clone()}</td> }).collect_view()}</tr> }
+                            })
+                            .collect_view()}
                     </tbody>
                 </table>
             }
@@ -121,18 +133,38 @@ fn sheet_table(s: &Sheet) -> AnyView {
         <div class="ogrid">
             <table>
                 <thead>
-                    <tr><th></th>{(0..width).map(|c| view! { <th>{column_name(c)}</th> }).collect_view()}</tr>
+                    <tr>
+                        <th></th>
+                        {(0..width).map(|c| view! { <th>{column_name(c)}</th> }).collect_view()}
+                    </tr>
                 </thead>
                 <tbody>
-                    {s.rows.iter().enumerate().map(|(r, row)| view! {
-                        <tr>
-                            <th>{r + 1}</th>
-                            {row.iter().map(|c| view! {
-                                // Long texts are cut off in the cell: show them whole on hover.
-                                <td class:num={numeric(c)} title=(c.chars().count() > 30).then(|| c.clone())>{c.clone()}</td>
-                            }).collect_view()}
-                        </tr>
-                    }).collect_view()}
+                    {s
+                        .rows
+                        .iter()
+                        .enumerate()
+                        .map(|(r, row)| {
+                            view! {
+                                <tr>
+                                    <th>{r + 1}</th>
+                                    {row
+                                        .iter()
+                                        .map(|c| {
+                                            view! {
+                                                // Long texts are cut off in the cell: show them whole on hover.
+                                                <td
+                                                    class:num={numeric(c)}
+                                                    title=(c.chars().count() > 30).then(|| c.clone())
+                                                >
+                                                    {c.clone()}
+                                                </td>
+                                            }
+                                        })
+                                        .collect_view()}
+                                </tr>
+                            }
+                        })
+                        .collect_view()}
                 </tbody>
             </table>
         </div>
@@ -152,21 +184,36 @@ fn Sheets(preview: Arc<Preview>) -> impl IntoView {
     let tabs = (names.len() > 1).then(|| {
         view! {
             <div class="otabs" role="tablist">
-                {names.into_iter().enumerate().map(|(i, name)| view! {
-                    <button class="otab" role="tab" class:on=move || current.get() == i
-                        aria-selected=move || if current.get() == i { "true" } else { "false" }
-                        on:click=move |_| current.set(i)>{name}</button>
-                }).collect_view()}
+                {names
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, name)| {
+                        view! {
+                            <button
+                                class="otab"
+                                role="tab"
+                                class:on=move || current.get() == i
+                                aria-selected=move || if current.get() == i { "true" } else { "false" }
+                                on:click=move |_| current.set(i)
+                            >
+                                {name}
+                            </button>
+                        }
+                    })
+                    .collect_view()}
             </div>
         }
     });
     view! {
         <div class="office osheets">
             {tabs}
-            {move || preview.with_value(|p| match &**p {
-                Preview::Sheets(s) => s.get(current.get()).map(sheet_table),
-                _ => None,
-            })}
+            {move || {
+                preview
+                    .with_value(|p| match &**p {
+                        Preview::Sheets(s) => s.get(current.get()).map(sheet_table),
+                        _ => None,
+                    })
+            }}
         </div>
     }
 }
@@ -177,16 +224,23 @@ fn presentation(slides: &[Slide], cut: bool) -> AnyView {
     }
     view! {
         <ol class="office oslides">
-            {slides.iter().enumerate().map(|(i, s)| view! {
-                <li class="oslide">
-                    <span class="onum">{i + 1}</span>
-                    <div class="otext">
-                        {(!s.title.is_empty()).then(|| view! { <p class="otitle">{s.title.clone()}</p> })}
-                        {s.lines.iter().map(|l| view! { <p>{l.clone()}</p> }).collect_view()}
-                        {(s.title.is_empty() && s.lines.is_empty()).then(|| view! { <p class="muted">"No text on this slide"</p> })}
-                    </div>
-                </li>
-            }).collect_view()}
+            {slides
+                .iter()
+                .enumerate()
+                .map(|(i, s)| {
+                    view! {
+                        <li class="oslide">
+                            <span class="onum">{i + 1}</span>
+                            <div class="otext">
+                                {(!s.title.is_empty()).then(|| view! { <p class="otitle">{s.title.clone()}</p> })}
+                                {s.lines.iter().map(|l| view! { <p>{l.clone()}</p> }).collect_view()}
+                                {(s.title.is_empty() && s.lines.is_empty())
+                                    .then(|| view! { <p class="muted">"No text on this slide"</p> })}
+                            </div>
+                        </li>
+                    }
+                })
+                .collect_view()}
         </ol>
         {cut.then(|| note("Only the first slides are shown.".into()))}
     }

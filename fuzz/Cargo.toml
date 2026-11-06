@@ -1,0 +1,40 @@
+[package]
+name = "narwhal-fuzz"
+version = "0.0.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+arbitrary = { version = "1", features = ["derive"] }
+libfuzzer-sys = "0.4"
+narwhal-office = { path = "../office" }
+
+# A workspace of its own, so the app's build and CI never compile this.
+# No Cargo.lock is committed: copy the app's (`cp Cargo.lock fuzz/`) so the
+# readers are fuzzed with the dependency versions that ship.
+[workspace]
+
+[[bin]]
+name = "parse"
+path = "fuzz_targets/parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "zip_parts"
+path = "fuzz_targets/zip_parts.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cfb_streams"
+path = "fuzz_targets/cfb_streams.rs"
+test = false
+doc = false
+bench = false

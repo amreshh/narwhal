@@ -75,11 +75,10 @@ pub fn QuickLook() -> impl IntoView {
         let kind = util::preview_kind(&entry);
         let url = api::download_url(&entry.path, true);
         let body = match kind {
-            Some(PreviewKind::Image) => view! { <img class="ql-img" src=url alt="" draggable="false"/> }.into_any(),
-            Some(PreviewKind::Video) => view! {
-                <video class="ql-video" src=url controls autoplay preload="metadata"></video>
+            Some(PreviewKind::Image) => view! { <img class="ql-img" src=url alt="" draggable="false" /> }.into_any(),
+            Some(PreviewKind::Video) => {
+                view! { <video class="ql-video" src=url controls autoplay preload="metadata"></video> }.into_any()
             }
-            .into_any(),
             Some(PreviewKind::Audio) => view! {
                 <div class="ql-info">
                     <span class="ql-icon" inner_html=icons::file_icon(&entry)></span>
@@ -89,11 +88,15 @@ pub fn QuickLook() -> impl IntoView {
             .into_any(),
             Some(PreviewKind::Pdf) => view! { <iframe class="ql-pdf" src=url title="PDF preview"></iframe> }.into_any(),
             Some(PreviewKind::Text) => view! {
-                <div class="ql-text"><TextPreview entry=entry.clone() limit=TEXT_BYTES/></div>
+                <div class="ql-text">
+                    <TextPreview entry=entry.clone() limit=TEXT_BYTES />
+                </div>
             }
             .into_any(),
             Some(PreviewKind::Office) => view! {
-                <div class="ql-office"><OfficePreview entry=entry.clone()/></div>
+                <div class="ql-office">
+                    <OfficePreview entry=entry.clone() />
+                </div>
             }
             .into_any(),
             None => {
@@ -112,39 +115,69 @@ pub fn QuickLook() -> impl IntoView {
         let (open_entry, dl_entry) = (entry.clone(), entry.clone());
         let is_file = !entry.is_dir();
         Some(view! {
-            <div class="ql-backdrop" on:mousedown=move |ev: ev::MouseEvent| {
-                if ev.target() == ev.current_target() {
-                    st.quicklook.set(false);
+            <div
+                class="ql-backdrop"
+                on:mousedown=move |ev: ev::MouseEvent| {
+                    if ev.target() == ev.current_target() {
+                        st.quicklook.set(false);
+                    }
                 }
-            }>
-                <button class="ql-nav prev" title="Previous (←/↑)" aria-label="Previous"
-                    disabled={pos == 0} on:click=move |_| step(-1)>
+            >
+                <button
+                    class="ql-nav prev"
+                    title="Previous (←/↑)"
+                    aria-label="Previous"
+                    disabled={pos == 0}
+                    on:click=move |_| step(-1)
+                >
                     <span class="ic" inner_html=icons::BACK></span>
                 </button>
                 <div class="ql" role="dialog" aria-label=format!("Quick Look: {}", entry.name)>
                     <div class="ql-head">
-                        <span class="ql-title" title=entry.path.clone()>{entry.name.clone()}</span>
+                        <span class="ql-title" title=entry.path.clone()>
+                            {entry.name.clone()}
+                        </span>
                         <span class="ql-count">{format!("{} of {count}", pos + 1)}</span>
-                        <button class="btn small" on:click=move |_| {
-                            st.quicklook.set(false);
-                            st.open(st.active_index(), &open_entry);
-                        }>
-                            <span class="ic" inner_html=icons::OPEN></span>"Open"
+                        <button
+                            class="btn small"
+                            on:click=move |_| {
+                                st.quicklook.set(false);
+                                st.open(st.active_index(), &open_entry);
+                            }
+                        >
+                            <span class="ic" inner_html=icons::OPEN></span>
+                            "Open"
                         </button>
-                        {is_file.then(|| view! {
-                            <button class="btn small" on:click=move |_| st.download(std::slice::from_ref(&dl_entry))>
-                                <span class="ic" inner_html=icons::DOWNLOAD></span>"Download"
-                            </button>
-                        })}
-                        <button class="tb" title="Close (Space or Esc)" aria-label="Close"
-                            on:click=move |_| st.quicklook.set(false)>
+                        {is_file
+                            .then(|| {
+                                view! {
+                                    <button
+                                        class="btn small"
+                                        on:click=move |_| st.download(std::slice::from_ref(&dl_entry))
+                                    >
+                                        <span class="ic" inner_html=icons::DOWNLOAD></span>
+                                        "Download"
+                                    </button>
+                                }
+                            })}
+                        <button
+                            class="tb"
+                            title="Close (Space or Esc)"
+                            aria-label="Close"
+                            on:click=move |_| st.quicklook.set(false)
+                        >
                             <span class="ic" inner_html=icons::CLOSE></span>
                         </button>
                     </div>
                     <div class="ql-body">{body}</div>
                 </div>
-                <button class="ql-nav next" title="Next (→/↓)" aria-label="Next"
-                    disabled={pos + 1 >= count} on:click=move |_| step(1)>
+                <button
+                    class="ql-nav next"
+                    title="Next (→/↓)"
+                    aria-label="Next"
+                    disabled={pos + 1 >= count}
+                    on:click=move |_| step(1)
+                >
                     <span class="ic" inner_html=icons::FORWARD></span>
                 </button>
             </div>

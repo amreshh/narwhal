@@ -1,10 +1,17 @@
 name: lint
 
-# Formatting (rustfmt, settings in rustfmt.toml) and lints (clippy).
-# Separate from the container workflow: a failure shows on the commit or PR
-# but doesn't stop images from being built.
+# Formatting and lints. Separate from the container workflow: a failure shows
+# on the commit or PR but doesn't stop images from being built.
 #
-# Fix formatting locally with: cargo fmt --all
+#   fmt          rustfmt (rustfmt.toml) and leptosfmt for view! markup
+#                (leptosfmt.toml). Fix with: cargo fmt --all && leptosfmt frontend/src
+#   clippy       warnings are errors
+#   typos        spell check (exceptions in typos.toml)
+#   actionlint   the workflow files, including their shell scripts
+#   hadolint     the Dockerfile
+#   kubeconform  the Kubernetes manifests in deploy/
+#
+# Actions are pinned to commits; Dependabot keeps them current.
 on:
   push:
     branches: [dev, main]
@@ -23,18 +30,34 @@ jobs:
   fmt:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Toolchain
         run: rustup toolchain install stable --profile minimal --component rustfmt
 
-      - name: Check formatting
-        run: cargo fmt --all --check
+      # Keeps the leptosfmt build below between runs.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Install leptosfmt
+        run: cargo install leptosfmt --locked --version 0.1.33
+
+      - name: rustfmt
+        run: |
+          cargo fmt --all --check
+          cargo fmt --manifest-path fuzz/Cargo.toml --check
+
+      # The markup inside view! macros, which rustfmt leaves alone.
+      - name: leptosfmt
+        run: leptosfmt --check frontend/src
 
   clippy:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Toolchain
         run: |
@@ -42,10 +65,68 @@ jobs:
           rustup target add wasm32-unknown-unknown
 
       # Caches ~/.cargo and target/ between runs, keyed on Cargo.lock and the toolchain.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       # The frontend only builds for the browser, so it's checked for wasm on its own.
       - name: Clippy
         run: |
           cargo clippy --locked -p narwhal-server -p narwhal-shared -p narwhal-office --all-targets -- -D warnings
           cargo clippy --locked -p narwhal-frontend --target wasm32-unknown-unknown -- -D warnings
+
+  typos:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: crate-ci/typos@4c8b7f51ca60df14e3c5ca82770dfbbe6c3dae85 # v1.52.0
+
+  actionlint:
+    runs-on: ubuntu-24.04
+    env:
+      VERSION: 1.7.12
+      SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Also runs ShellCheck (installed on the runner) on the run: scripts.
+      - name: actionlint
+        run: |
+          file="actionlint_${VERSION}_linux_amd64.tar.gz"
+          curl -fsSLO "https://github.com/rhysd/actionlint/releases/download/v${VERSION}/${file}"
+          echo "${SHA256}  ${file}" | sha256sum -c -
+          tar -xzf "$file" actionlint
+          ./actionlint -color
+
+  hadolint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
+        with:
+          dockerfile: Dockerfile
+          failure-threshold: warning
+
+  kubeconform:
+    runs-on: ubuntu-24.04
+    env:
+      VERSION: 0.8.0
+      SHA256: 9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Validates what `kubectl apply -k deploy` would send.
+      - name: kubeconform
+        run: |
+          curl -fsSLO "https://github.com/yannh/kubeconform/releases/download/v${VERSION}/kubeconform-linux-amd64.tar.gz"
+          echo "${SHA256}  kubeconform-linux-amd64.tar.gz" | sha256sum -c -
+          tar -xzf kubeconform-linux-amd64.tar.gz kubeconform
+          kubectl kustomize deploy | ./kubeconform -strict -summary -

@@ -87,26 +87,26 @@ pub fn App() -> impl IntoView {
 
     view! {
         <div class="app">
-            <Toolbar/>
-            <MessageBar/>
+            <Toolbar />
+            <MessageBar />
             <div class="body">
                 <Show when=move || st.places_open.get()>
-                    <Places/>
+                    <Places />
                 </Show>
                 <main class="views" class:split=move || st.split.get()>
-                    <PaneView idx=0/>
+                    <PaneView idx=0 />
                     <Show when=move || st.split.get()>
-                        <PaneView idx=1/>
+                        <PaneView idx=1 />
                     </Show>
                 </main>
             </div>
-            <StatusBar/>
-            <ContextMenu/>
-            <DialogHost/>
+            <StatusBar />
+            <ContextMenu />
+            <DialogHost />
             <Show when=move || st.quicklook.get()>
-                <QuickLook/>
+                <QuickLook />
             </Show>
-            <input type="file" multiple=true class="hidden-input" node_ref=st.upload_input on:change=on_files/>
+            <input type="file" multiple=true class="hidden-input" node_ref=st.upload_input on:change=on_files />
         </div>
     }
 }
@@ -298,8 +298,13 @@ fn Toolbar() -> impl IntoView {
 
     let view_btn = move |mode: ViewMode, icon: &'static str, title: &'static str| {
         view! {
-            <button class="tb" class:on=move || st.view.get() == mode title=title aria-label=title
-                on:click=move |_| st.view.set(mode)>
+            <button
+                class="tb"
+                class:on=move || st.view.get() == mode
+                title=title
+                aria-label=title
+                on:click=move |_| st.view.set(mode)
+            >
                 <span class="ic" inner_html=icon></span>
             </button>
         }
@@ -308,16 +313,31 @@ fn Toolbar() -> impl IntoView {
     view! {
         <header class="toolbar">
             <div class="group">
-                <button class="tb" title="Back (Alt+Left)" aria-label="Back" disabled=move || !can_back()
-                    on:click=move |_| st.go_back(st.active_index())>
+                <button
+                    class="tb"
+                    title="Back (Alt+Left)"
+                    aria-label="Back"
+                    disabled=move || !can_back()
+                    on:click=move |_| st.go_back(st.active_index())
+                >
                     <span class="ic" inner_html=icons::BACK></span>
                 </button>
-                <button class="tb" title="Forward (Alt+Right)" aria-label="Forward" disabled=move || !can_fwd()
-                    on:click=move |_| st.go_forward(st.active_index())>
+                <button
+                    class="tb"
+                    title="Forward (Alt+Right)"
+                    aria-label="Forward"
+                    disabled=move || !can_fwd()
+                    on:click=move |_| st.go_forward(st.active_index())
+                >
                     <span class="ic" inner_html=icons::FORWARD></span>
                 </button>
-                <button class="tb" title="Up (Alt+Up)" aria-label="Up" disabled=at_root
-                    on:click=move |_| st.go_up(st.active_index())>
+                <button
+                    class="tb"
+                    title="Up (Alt+Up)"
+                    aria-label="Up"
+                    disabled=at_root
+                    on:click=move |_| st.go_up(st.active_index())
+                >
                     <span class="ic" inner_html=icons::UP></span>
                 </button>
             </div>
@@ -333,47 +353,82 @@ fn Toolbar() -> impl IntoView {
 
             <Show when=writable>
                 <div class="group">
-                    <button class="tb labeled" title="Create a new folder (F7)"
-                        on:click=move |_| st.dialog.set(Some(Dialog::NewFolder(st.active_index())))>
-                        <span class="ic" inner_html=icons::NEW_FOLDER></span><span class="tl">"New Folder"</span>
+                    <button
+                        class="tb labeled"
+                        title="Create a new folder (F7)"
+                        on:click=move |_| st.dialog.set(Some(Dialog::NewFolder(st.active_index())))
+                    >
+                        <span class="ic" inner_html=icons::NEW_FOLDER></span>
+                        <span class="tl">"New Folder"</span>
                     </button>
-                    <button class="tb labeled" title="Upload files into this folder"
-                        on:click=move |_| st.pick_upload(st.active_index(), false)>
-                        <span class="ic" inner_html=icons::UPLOAD></span><span class="tl">"Upload"</span>
+                    <button
+                        class="tb labeled"
+                        title="Upload files into this folder"
+                        on:click=move |_| st.pick_upload(st.active_index(), false)
+                    >
+                        <span class="ic" inner_html=icons::UPLOAD></span>
+                        <span class="tl">"Upload"</span>
                     </button>
-                    <button class="tb labeled" title="Upload a folder with its contents into this folder"
-                        on:click=move |_| st.pick_upload(st.active_index(), true)>
-                        <span class="ic" inner_html=icons::UPLOAD_FOLDER></span><span class="tl">"Upload Folder"</span>
+                    <button
+                        class="tb labeled"
+                        title="Upload a folder with its contents into this folder"
+                        on:click=move |_| st.pick_upload(st.active_index(), true)
+                    >
+                        <span class="ic" inner_html=icons::UPLOAD_FOLDER></span>
+                        <span class="tl">"Upload Folder"</span>
                     </button>
                 </div>
             </Show>
 
             <div class="group">
-                <button class="tb hide-sm" class:on=move || st.previews.get() title="Show previews" aria-label="Show previews"
-                    on:click=move |_| st.previews.update(|v| *v = !*v)>
+                <button
+                    class="tb hide-sm"
+                    class:on=move || st.previews.get()
+                    title="Show previews"
+                    aria-label="Show previews"
+                    on:click=move |_| st.previews.update(|v| *v = !*v)
+                >
                     <span class="ic" inner_html=icons::PREVIEW></span>
                 </button>
-                <button class="tb labeled" class:on=move || st.split.get() title="Split view (F3)"
-                    on:click=move |_| st.toggle_split()>
-                    <span class="ic" inner_html=icons::SPLIT></span><span class="tl">"Split"</span>
+                <button
+                    class="tb labeled"
+                    class:on=move || st.split.get()
+                    title="Split view (F3)"
+                    on:click=move |_| st.toggle_split()
+                >
+                    <span class="ic" inner_html=icons::SPLIT></span>
+                    <span class="tl">"Split"</span>
                 </button>
-                <button class="tb" class:on=move || pane().search.with(|s| s.is_some()) title="Search (Ctrl+F)"
+                <button
+                    class="tb"
+                    class:on=move || pane().search.with(|s| s.is_some())
+                    title="Search (Ctrl+F)"
                     aria-label="Search"
                     on:click=move |_| {
                         let i = st.active_index();
-                        if st.panes[i].search.with_untracked(|s| s.is_some()) { st.close_search(i) } else { st.open_search(i) }
-                    }>
+                        if st.panes[i].search.with_untracked(|s| s.is_some()) {
+                            st.close_search(i)
+                        } else {
+                            st.open_search(i)
+                        }
+                    }
+                >
                     <span class="ic" inner_html=icons::SEARCH></span>
                 </button>
             </div>
 
             <div class="hamburger">
-                <button class="tb" class:on=move || st.hamburger.get() title="Menu" aria-label="Menu"
-                    on:click=move |_| st.hamburger.update(|v| *v = !*v)>
+                <button
+                    class="tb"
+                    class:on=move || st.hamburger.get()
+                    title="Menu"
+                    aria-label="Menu"
+                    on:click=move |_| st.hamburger.update(|v| *v = !*v)
+                >
                     <span class="ic" inner_html=icons::MENU></span>
                 </button>
                 <Show when=move || st.hamburger.get()>
-                    <HamburgerMenu/>
+                    <HamburgerMenu />
                 </Show>
             </div>
         </header>
@@ -386,12 +441,24 @@ fn HamburgerMenu() -> impl IntoView {
     let i = st.active_index();
     view! {
         <div class="menu popup" role="menu">
-            {mcheck(st, "Show Hidden Files", "Ctrl+H", st.show_hidden.get_untracked(), move || st.show_hidden.update(|v| *v = !*v))}
+            {mcheck(
+                st,
+                "Show Hidden Files",
+                "Ctrl+H",
+                st.show_hidden.get_untracked(),
+                move || st.show_hidden.update(|v| *v = !*v),
+            )}
             {mcheck(st, "Show Previews", "", st.previews.get_untracked(), move || st.previews.update(|v| *v = !*v))}
-            {mcheck(st, "Show Places Panel", "F9", st.places_open.get_untracked(), move || st.places_open.update(|v| *v = !*v))}
+            {mcheck(
+                st,
+                "Show Places Panel",
+                "F9",
+                st.places_open.get_untracked(),
+                move || st.places_open.update(|v| *v = !*v),
+            )}
             {mcheck(st, "Split View", "F3", st.split.get_untracked(), move || st.toggle_split())}
             <div class="msep"></div>
-            <ParallelPicker/>
+            <ParallelPicker />
             <div class="msep"></div>
             {mi(st, "Filter…", "Ctrl+I", icons::FILTER, move || st.panes[i].filter.set(Some(String::new())))}
             {mi(st, "Search…", "Ctrl+F", icons::SEARCH, move || st.open_search(i))}
@@ -412,15 +479,25 @@ fn MessageBar() -> impl IntoView {
                 <div class="msgbar" class:error={kind == MsgKind::Error} role="status">
                     <span class="ic" inner_html=icons::INFO></span>
                     <span class="msgtext">{text}</span>
-                    {move || st.undo.get().map(|ids| view! {
-                        <button class="btn small" on:click=move |_| {
-                            st.message.set(None);
-                            st.undo.set(None);
-                            st.restore(ids.clone());
-                        }>
-                            <span class="ic" inner_html=icons::RESTORE></span>"Undo"
-                        </button>
-                    })}
+                    {move || {
+                        st.undo
+                            .get()
+                            .map(|ids| {
+                                view! {
+                                    <button
+                                        class="btn small"
+                                        on:click=move |_| {
+                                            st.message.set(None);
+                                            st.undo.set(None);
+                                            st.restore(ids.clone());
+                                        }
+                                    >
+                                        <span class="ic" inner_html=icons::RESTORE></span>
+                                        "Undo"
+                                    </button>
+                                }
+                            })
+                    }}
                     {tool_button(icons::CLOSE, "Dismiss", move || st.message.set(None))}
                 </div>
             }
@@ -447,10 +524,16 @@ fn Places() -> impl IntoView {
                     .enumerate()
                     .map(|(n, place)| {
                         let icon = if n == 0 { icons::DRIVE } else { icons::FOLDER };
-                        let (p1, p2, p3, p4) = (place.path.clone(), place.path.clone(), place.path.clone(), place.path.clone());
+                        let (p1, p2, p3, p4) = (
+                            place.path.clone(),
+                            place.path.clone(),
+                            place.path.clone(),
+                            place.path.clone(),
+                        );
                         let p5 = place.path.clone();
                         view! {
-                            <button class="place"
+                            <button
+                                class="place"
                                 class:current=move || current() == p1
                                 class:droptarget=move || st.drop_target.with(|d| d.as_deref() == Some(p2.as_str()))
                                 title=place.path.clone()
@@ -464,7 +547,8 @@ fn Places() -> impl IntoView {
                                 on:drop=move |ev: ev::DragEvent| {
                                     ev.prevent_default();
                                     st.handle_drop(&ev, p5.clone());
-                                }>
+                                }
+                            >
                                 <span class="ic" inner_html=icon></span>
                                 <span class="label">{place.name}</span>
                             </button>
@@ -473,11 +557,11 @@ fn Places() -> impl IntoView {
                     .collect_view()
             }}
             <Show when=move || st.info.with(|i| i.as_ref().is_some_and(|i| i.trash))>
-                <TrashPlace/>
+                <TrashPlace />
             </Show>
             <div class="grow"></div>
             <div class="section">"Storage"</div>
-            <DiskMeter/>
+            <DiskMeter />
         </aside>
     }
 }
@@ -489,11 +573,13 @@ fn TrashPlace() -> impl IntoView {
     let current = move || st.panes[st.active.get()].path.with(|p| p == TRASH);
     let is_drop = move || st.drop_target.with(|d| d.as_deref() == Some(TRASH));
     view! {
-        <button class="place trash" class:current=current class:droptarget=is_drop
+        <button
+            class="place trash"
+            class:current=current
+            class:droptarget=is_drop
             title="Deleted items — drop items here to delete them"
             on:click=move |_| st.navigate(st.active_index(), TRASH.into())
             on:dragover=move |ev: ev::DragEvent| {
-                // Only items from inside the app can be trashed.
                 if st.dragging.with_untracked(|d| d.is_none()) {
                     return;
                 }
@@ -512,7 +598,8 @@ fn TrashPlace() -> impl IntoView {
                     st.dragging.set(None);
                     st.move_to_trash(paths);
                 }
-            }>
+            }
+        >
             <span class="ic" inner_html=icons::TRASH></span>
             <span class="label">"Trash"</span>
             {move || (count() > 0).then(|| view! { <span class="count">{count()}</span> })}
@@ -599,40 +686,66 @@ fn PaneView(idx: usize) -> impl IntoView {
             .get()
             .into_iter()
             .enumerate()
-            .map(|(pos, entry)| view! { <Item idx=idx pos=pos entry=entry/> })
+            .map(|(pos, entry)| view! { <Item idx=idx pos=pos entry=entry /> })
             .collect_view()
     };
 
     view! {
-        <section class="pane" class:active=move || st.active.get() == idx data-pane=idx.to_string()
-            on:mousedown=move |_| st.active.set(idx)>
-            <LocationBar idx=idx/>
+        <section
+            class="pane"
+            class:active=move || st.active.get() == idx
+            data-pane=idx.to_string()
+            on:mousedown=move |_| st.active.set(idx)
+        >
+            <LocationBar idx=idx />
             <Show when=move || p.search.with(|s| s.is_some())>
-                <SearchBar idx=idx/>
+                <SearchBar idx=idx />
             </Show>
             <div class="loadbar" class:on=move || p.loading.get()></div>
-            <div class="view" class:droptarget=is_drop class:cols=column_view tabindex="-1"
+            <div
+                class="view"
+                class:droptarget=is_drop
+                class:cols=column_view
+                tabindex="-1"
                 style=move || format!("--icon:{}px", st.zoom.get())
-                on:click=on_bg_click on:contextmenu=on_bg_menu
-                on:dragover=on_dragover on:dragleave=on_dragleave on:drop=on_drop>
+                on:click=on_bg_click
+                on:contextmenu=on_bg_menu
+                on:dragover=on_dragover
+                on:dragleave=on_dragleave
+                on:drop=on_drop
+            >
                 {move || match st.view.get() {
-                    _ if in_trash.get() => view! { <TrashView idx=idx/> }.into_any(),
-                    ViewMode::Columns if column_view.get() => view! { <ColumnsView idx=idx/> }.into_any(),
-                    ViewMode::Details | ViewMode::Columns => view! {
-                        <DetailsHeader/>
-                        <div class="rows" role="grid">{list}</div>
-                    }.into_any(),
-                    mode => view! {
-                        <div class="grid" class:compact={mode == ViewMode::Compact} role="grid">{list}</div>
-                    }.into_any(),
+                    _ if in_trash.get() => view! { <TrashView idx=idx /> }.into_any(),
+                    ViewMode::Columns if column_view.get() => view! { <ColumnsView idx=idx /> }.into_any(),
+                    ViewMode::Details | ViewMode::Columns => {
+                        view! {
+                            <DetailsHeader />
+                            <div class="rows" role="grid">
+                                {list}
+                            </div>
+                        }
+                            .into_any()
+                    }
+                    mode => {
+                        view! {
+                            <div class="grid" class:compact={mode == ViewMode::Compact} role="grid">
+                                {list}
+                            </div>
+                        }
+                            .into_any()
+                    }
                 }}
                 {move || {
                     if column_view.get() || in_trash.get() {
-                        return None; // These show their own state.
+                        return None;
                     }
                     let empty = items.with(|v| v.is_empty());
                     if let Some(err) = p.error.get() {
-                        Some(view! { <div class="placeholder error">{err}</div> }.into_any())
+                        Some(
+                            // These show their own state.
+                            view! { <div class="placeholder error">{err}</div> }
+                                .into_any(),
+                        )
                     } else if empty && p.loading.get() {
                         Some(view! { <div class="placeholder">"Loading…"</div> }.into_any())
                     } else if empty {
@@ -650,7 +763,7 @@ fn PaneView(idx: usize) -> impl IntoView {
                 }}
             </div>
             <Show when=move || p.filter.with(|f| f.is_some()) && !in_trash.get()>
-                <FilterBar idx=idx/>
+                <FilterBar idx=idx />
             </Show>
         </section>
     }
@@ -684,12 +797,15 @@ fn LocationBar(idx: usize) -> impl IntoView {
     });
 
     view! {
-        <div class="location" title="Click to edit the location (Ctrl+L)"
+        <div
+            class="location"
+            title="Click to edit the location (Ctrl+L)"
             on:click=move |_| {
                 if p.path.with_untracked(|x| x != TRASH) {
                     p.editing_location.set(true)
                 }
-            }>
+            }
+        >
             {move || {
                 if p.path.with(|x| x == TRASH) {
                     view! {
@@ -700,10 +816,14 @@ fn LocationBar(idx: usize) -> impl IntoView {
                             </span>
                         </nav>
                     }
-                    .into_any()
+                        .into_any()
                 } else if p.editing_location.get() {
                     view! {
-                        <input class="loc-input" node_ref=input spellcheck="false" prop:value=move || p.path.get()
+                        <input
+                            class="loc-input"
+                            node_ref=input
+                            spellcheck="false"
+                            prop:value=move || p.path.get()
                             on:click=|ev: ev::MouseEvent| ev.stop_propagation()
                             on:keydown=move |ev: ev::KeyboardEvent| match ev.key().as_str() {
                                 "Enter" => {
@@ -715,19 +835,23 @@ fn LocationBar(idx: usize) -> impl IntoView {
                                 "Escape" => p.editing_location.set(false),
                                 _ => {}
                             }
-                            on:blur=move |_| p.editing_location.set(false)/>
+                            on:blur=move |_| p.editing_location.set(false)
+                        />
                     }
-                    .into_any()
+                        .into_any()
                 } else {
                     let list = crumbs();
                     let last = list.len();
                     view! {
                         <nav class="crumbs" aria-label="Location">
-                            <button class="crumb root" class:current={last == 0}
+                            <button
+                                class="crumb root"
+                                class:current={last == 0}
                                 on:click=move |ev: ev::MouseEvent| {
                                     ev.stop_propagation();
                                     st.navigate(idx, "/".into());
-                                }>
+                                }
+                            >
                                 <span class="ic" inner_html=icons::DRIVE></span>
                                 <span>{root_name}</span>
                             </button>
@@ -737,11 +861,14 @@ fn LocationBar(idx: usize) -> impl IntoView {
                                 .map(|(n, (name, path))| {
                                     view! {
                                         <span class="sep ic" inner_html=icons::CHEVRON></span>
-                                        <button class="crumb" class:current={n + 1 == last}
+                                        <button
+                                            class="crumb"
+                                            class:current={n + 1 == last}
                                             on:click=move |ev: ev::MouseEvent| {
                                                 ev.stop_propagation();
                                                 st.navigate(idx, path.clone());
-                                            }>
+                                            }
+                                        >
                                             {name}
                                         </button>
                                     }
@@ -749,7 +876,7 @@ fn LocationBar(idx: usize) -> impl IntoView {
                                 .collect_view()}
                         </nav>
                     }
-                    .into_any()
+                        .into_any()
                 }
             }}
         </div>
@@ -770,14 +897,17 @@ fn SearchBar(idx: usize) -> impl IntoView {
     view! {
         <div class="bar searchbar">
             <span class="ic" inner_html=icons::SEARCH></span>
-            <input node_ref=input placeholder="Search file names in this folder and below — press Enter"
+            <input
+                node_ref=input
+                placeholder="Search file names in this folder and below — press Enter"
                 prop:value=move || p.search.get().unwrap_or_default()
                 on:input=move |ev: ev::Event| p.search.set(Some(event_target_value(&ev)))
                 on:keydown=move |ev: ev::KeyboardEvent| match ev.key().as_str() {
                     "Enter" => st.run_search(idx),
                     "Escape" => st.close_search(idx),
                     _ => {}
-                }/>
+                }
+            />
             <span class="hint">{count}</span>
             {tool_button(icons::CLOSE, "Close search", move || st.close_search(idx))}
         </div>
@@ -798,14 +928,17 @@ fn FilterBar(idx: usize) -> impl IntoView {
         <div class="bar filterbar">
             <span class="ic" inner_html=icons::FILTER></span>
             <span class="hint">"Filter:"</span>
-            <input node_ref=input placeholder="Type to filter the current view"
+            <input
+                node_ref=input
+                placeholder="Type to filter the current view"
                 prop:value=move || p.filter.get().unwrap_or_default()
                 on:input=move |ev: ev::Event| p.filter.set(Some(event_target_value(&ev)))
                 on:keydown=move |ev: ev::KeyboardEvent| {
                     if ev.key() == "Escape" {
                         p.filter.set(None);
                     }
-                }/>
+                }
+            />
             {tool_button(icons::CLOSE, "Close filter", move || p.filter.set(None))}
         </div>
     }
@@ -816,18 +949,21 @@ fn DetailsHeader() -> impl IntoView {
     let st = use_st();
     let head = move |key: SortKey, label: &'static str, class: &'static str| {
         view! {
-            <button class=format!("hcol {class}")
+            <button
+                class=format!("hcol {class}")
                 on:click=move |ev: ev::MouseEvent| {
                     ev.stop_propagation();
-                    st.sort.update(|(k, asc)| {
-                        if *k == key {
-                            *asc = !*asc;
-                        } else {
-                            *k = key;
-                            *asc = true;
-                        }
-                    });
-                }>
+                    st.sort
+                        .update(|(k, asc)| {
+                            if *k == key {
+                                *asc = !*asc;
+                            } else {
+                                *k = key;
+                                *asc = true;
+                            }
+                        });
+                }
+            >
                 <span>{label}</span>
                 <span class="arrow">
                     {move || {
@@ -965,10 +1101,10 @@ fn Item(idx: usize, pos: usize, entry: Entry) -> impl IntoView {
     let icon = move || {
         let use_thumb = st.previews.get() && st.view.get() == ViewMode::Icons;
         match (&thumb, use_thumb) {
-            (Some(url), true) => view! {
-                <img class="thumb" loading="lazy" decoding="async" draggable="false" src=url.clone() alt=""/>
+            (Some(url), true) => {
+                view! { <img class="thumb" loading="lazy" decoding="async" draggable="false" src=url.clone() alt="" /> }
+                    .into_any()
             }
-            .into_any(),
             _ => view! { <span class="fi-wrap" inner_html=icon_svg.clone()></span> }.into_any(),
         }
     };
@@ -978,7 +1114,7 @@ fn Item(idx: usize, pos: usize, entry: Entry) -> impl IntoView {
     let renaming2 = renaming.clone();
     let label = move || {
         if renaming() {
-            view! { <RenameBox idx=idx path=rename_path.clone() name=name.clone()/> }.into_any()
+            view! { <RenameBox idx=idx path=rename_path.clone() name=name.clone() /> }.into_any()
         } else {
             view! { <span class="name">{name.clone()}</span> }.into_any()
         }
@@ -987,14 +1123,25 @@ fn Item(idx: usize, pos: usize, entry: Entry) -> impl IntoView {
         p.results.with_untracked(|r| r.is_some()).then(|| view! { <span class="where">{vparent(&entry.path)}</span> });
 
     view! {
-        <div class="item" role="gridcell"
-            class:selected=selected class:cursor=is_cursor class:cut=is_cut class:droptarget=is_drop
+        <div
+            class="item"
+            role="gridcell"
+            class:selected=selected
+            class:cursor=is_cursor
+            class:cut=is_cut
+            class:droptarget=is_drop
             class:dim={entry.hidden}
             aria-selected=move || if p.selected.with(|s| s.contains(&entry.path)) { "true" } else { "false" }
-            data-pos=pos.to_string() title=path.clone()
+            data-pos=pos.to_string()
+            title=path.clone()
             draggable=move || if renaming2() { "false" } else { "true" }
-            on:click=on_click on:dblclick=on_dbl on:contextmenu=on_menu
-            on:dragstart=on_dragstart on:dragover=on_dragover on:drop=on_drop>
+            on:click=on_click
+            on:dblclick=on_dbl
+            on:contextmenu=on_menu
+            on:dragstart=on_dragstart
+            on:dragover=on_dragover
+            on:drop=on_drop
+        >
             <div class="icon">{icon}</div>
             <div class="label">{label}{subtitle}</div>
             <span class="col size">{size_text(&entry)}</span>
@@ -1031,7 +1178,11 @@ pub fn RenameBox(idx: usize, path: String, name: String) -> impl IntoView {
     };
     let commit2 = commit.clone();
     view! {
-        <input class="rename" node_ref=input value=name spellcheck="false"
+        <input
+            class="rename"
+            node_ref=input
+            value=name
+            spellcheck="false"
             on:click=|ev: ev::MouseEvent| ev.stop_propagation()
             on:dblclick=|ev: ev::MouseEvent| ev.stop_propagation()
             on:mousedown=|ev: ev::MouseEvent| ev.stop_propagation()
@@ -1046,7 +1197,8 @@ pub fn RenameBox(idx: usize, path: String, name: String) -> impl IntoView {
                     _ => {}
                 }
             }
-            on:blur=move |ev: ev::FocusEvent| commit2(event_target_value(&ev))/>
+            on:blur=move |ev: ev::FocusEvent| commit2(event_target_value(&ev))
+        />
     }
 }
 
@@ -1062,13 +1214,16 @@ pub(crate) fn mi(
     f: impl Fn() + 'static,
 ) -> impl IntoView {
     view! {
-        <button class="mi" role="menuitem"
+        <button
+            class="mi"
+            role="menuitem"
             on:click=move |ev: ev::MouseEvent| {
                 ev.stop_propagation();
                 st.menu.set(None);
                 st.hamburger.set(false);
                 f();
-            }>
+            }
+        >
             <span class="ic" inner_html=icon></span>
             <span class="ml">{label}</span>
             <span class="ks">{keys}</span>
@@ -1102,8 +1257,12 @@ fn ContextMenu() -> impl IntoView {
                 None => background_menu(st, m.pane, ro),
             };
             view! {
-                <div class="menu ctx" role="menu" style=format!("left:{x}px;top:{y}px")
-                    on:contextmenu=|ev: ev::MouseEvent| ev.prevent_default()>
+                <div
+                    class="menu ctx"
+                    role="menu"
+                    style=format!("left:{x}px;top:{y}px")
+                    on:contextmenu=|ev: ev::MouseEvent| ev.prevent_default()
+                >
                     {body}
                 </div>
             }
@@ -1130,21 +1289,36 @@ fn item_menu(st: AppState, i: usize, e: Entry, ro: bool) -> AnyView {
         <div class="msep"></div>
         {(!ro).then(|| mi(st, "Cut", "Ctrl+X", icons::CUT, move || st.copy(i, true)))}
         {mi(st, "Copy", "Ctrl+C", icons::COPY, move || st.copy(i, false))}
-        {(!ro && has_clip && is_dir).then(|| mi(st, "Paste Into Folder", "", icons::PASTE, move || st.paste(i, Some(p_paste.clone()))))}
+        {(!ro && has_clip && is_dir)
+            .then(|| mi(st, "Paste Into Folder", "", icons::PASTE, move || st.paste(i, Some(p_paste.clone()))))}
         <div class="msep"></div>
         {(!ro && n == 1).then(|| mi(st, "Rename…", "F2", icons::RENAME, move || st.start_rename(i)))}
-        {(!ro && st.trash_enabled()).then(|| mi(st, "Move to Trash", "Del", icons::TRASH, move || st.ask_delete(i, false)))}
-        {(!ro).then(|| {
-            let keys = if st.trash_enabled() { "Shift+Del" } else { "Del" };
-            mi(st, "Delete Permanently", keys, icons::CLOSE, move || st.ask_delete(i, true))
-        })}
+        {(!ro && st.trash_enabled())
+            .then(|| mi(st, "Move to Trash", "Del", icons::TRASH, move || st.ask_delete(i, false)))}
+        {(!ro)
+            .then(|| {
+                let keys = if st.trash_enabled() { "Shift+Del" } else { "Del" };
+                mi(st, "Delete Permanently", keys, icons::CLOSE, move || st.ask_delete(i, true))
+            })}
     };
     let more = view! {
         <div class="msep"></div>
         {mi(st, "Copy Location", "", icons::LINK, move || st.copy_location(&e2.path))}
-        {(n == 1).then(|| mi(st, "Properties", "Alt+Enter", icons::INFO, move || st.dialog.set(Some(Dialog::Properties(e3.clone())))))}
+        {(n == 1)
+            .then(|| mi(
+                st,
+                "Properties",
+                "Alt+Enter",
+                icons::INFO,
+                move || st.dialog.set(Some(Dialog::Properties(e3.clone()))),
+            ))}
     };
-    view! { {open}{edit}{more} }.into_any()
+    view! {
+        {open}
+        {edit}
+        {more}
+    }
+    .into_any()
 }
 
 fn background_menu(st: AppState, i: usize, ro: bool) -> AnyView {
@@ -1163,8 +1337,16 @@ fn background_menu(st: AppState, i: usize, ro: bool) -> AnyView {
     };
 
     let create = view! {
-        {(!ro).then(|| mi(st, "New Folder…", "F7", icons::NEW_FOLDER, move || st.dialog.set(Some(Dialog::NewFolder(i)))))}
-        {(!ro).then(|| mi(st, "New Text File…", "", icons::NEW_FILE, move || st.dialog.set(Some(Dialog::NewFile(i)))))}
+        {(!ro)
+            .then(|| mi(
+                st,
+                "New Folder…",
+                "F7",
+                icons::NEW_FOLDER,
+                move || st.dialog.set(Some(Dialog::NewFolder(i))),
+            ))}
+        {(!ro)
+            .then(|| mi(st, "New Text File…", "", icons::NEW_FILE, move || st.dialog.set(Some(Dialog::NewFile(i)))))}
         {(!ro).then(|| mi(st, "Upload Files…", "", icons::UPLOAD, move || st.pick_upload(i, false)))}
         {(!ro).then(|| mi(st, "Upload Folder…", "", icons::UPLOAD_FOLDER, move || st.pick_upload(i, true)))}
         {(!ro && has_clip).then(|| mi(st, "Paste", "Ctrl+V", icons::PASTE, move || st.paste(i, None)))}
@@ -1187,9 +1369,20 @@ fn background_menu(st: AppState, i: usize, ro: bool) -> AnyView {
         {mcheck(st, "Modified", "", sort == SortKey::Modified, move || set_sort(SortKey::Modified))}
         {mcheck(st, "Type", "", sort == SortKey::Type, move || set_sort(SortKey::Type))}
         <div class="msep"></div>
-        {mcheck(st, "Show Hidden Files", "Ctrl+H", st.show_hidden.get_untracked(), move || st.show_hidden.update(|v| *v = !*v))}
+        {mcheck(
+            st,
+            "Show Hidden Files",
+            "Ctrl+H",
+            st.show_hidden.get_untracked(),
+            move || st.show_hidden.update(|v| *v = !*v),
+        )}
     };
-    view! { {create}{modes}{sorting} }.into_any()
+    view! {
+        {create}
+        {modes}
+        {sorting}
+    }
+    .into_any()
 }
 
 // ===========================================================================
@@ -1202,13 +1395,9 @@ fn DialogHost() -> impl IntoView {
     move || {
         st.dialog.get().map(|d| {
             let body = match d {
-                Dialog::NewFolder(i) => view! {
-                    <NameDialog i=i folder=true title="Create New Folder" label="Folder name" initial="New Folder"/>
-                }
+                Dialog::NewFolder(i) => view! { <NameDialog i=i folder=true title="Create New Folder" label="Folder name" initial="New Folder" /> }
                 .into_any(),
-                Dialog::NewFile(i) => view! {
-                    <NameDialog i=i folder=false title="Create New Text File" label="File name" initial="New Text File.txt"/>
-                }
+                Dialog::NewFile(i) => view! { <NameDialog i=i folder=false title="Create New Text File" label="File name" initial="New Text File.txt" /> }
                 .into_any(),
                 Dialog::ConfirmDelete(paths) => {
                     let what = match paths.as_slice() {
@@ -1216,7 +1405,7 @@ fn DialogHost() -> impl IntoView {
                         many => format!("these {} items", many.len()),
                     };
                     let text = format!("Do you really want to permanently delete {what}?");
-                    view! { <DeleteDialog text=text on_ok=move || st.delete(paths.clone())/> }.into_any()
+                    view! { <DeleteDialog text=text on_ok=move || st.delete(paths.clone()) /> }.into_any()
                 }
                 Dialog::ConfirmPurge(ids) => {
                     let names: Vec<String> = st.trash.with_untracked(|t| {
@@ -1230,7 +1419,7 @@ fn DialogHost() -> impl IntoView {
                         _ => format!("these {} items", ids.len()),
                     };
                     let text = format!("Do you really want to permanently delete {what} from the Trash?");
-                    view! { <DeleteDialog text=text on_ok=move || st.purge(ids.clone())/> }.into_any()
+                    view! { <DeleteDialog text=text on_ok=move || st.purge(ids.clone()) /> }.into_any()
                 }
                 Dialog::ConfirmEmptyTrash => {
                     let n = st.info.with_untracked(|i| i.as_ref().map(|i| i.trash_items).unwrap_or(0));
@@ -1238,18 +1427,20 @@ fn DialogHost() -> impl IntoView {
                         "Do you really want to empty the Trash? {} will be deleted permanently.",
                         if n == 1 { "1 item".to_string() } else { format!("All {n} items") }
                     );
-                    view! { <DeleteDialog text=text on_ok=move || st.empty_trash()/> }.into_any()
+                    view! { <DeleteDialog text=text on_ok=move || st.empty_trash() /> }.into_any()
                 }
-                Dialog::Properties(entry) => view! { <PropertiesDialog entry=entry/> }.into_any(),
-                Dialog::Shortcuts => view! { <ShortcutsDialog/> }.into_any(),
+                Dialog::Properties(entry) => view! { <PropertiesDialog entry=entry /> }.into_any(),
+                Dialog::Shortcuts => view! { <ShortcutsDialog /> }.into_any(),
             };
             view! {
-                <div class="overlay"
+                <div
+                    class="overlay"
                     on:mousedown=move |ev: ev::MouseEvent| {
                         if ev.target() == ev.current_target() {
                             st.dialog.set(None);
                         }
-                    }>
+                    }
+                >
                     {body}
                 </div>
             }
@@ -1294,18 +1485,29 @@ fn NameDialog(
             <h2>{title}</h2>
             <label class="field">
                 <span>{label}</span>
-                <input node_ref=input spellcheck="false" prop:value=move || value.get()
+                <input
+                    node_ref=input
+                    spellcheck="false"
+                    prop:value=move || value.get()
                     on:input=move |ev: ev::Event| value.set(event_target_value(&ev))
                     on:keydown=move |ev: ev::KeyboardEvent| {
                         if ev.key() == "Enter" {
                             submit();
                         }
-                    }/>
+                    }
+                />
             </label>
             <div class="buttons">
-                <button class="btn primary" disabled=move || value.with(|v| v.trim().is_empty())
-                    on:click=move |_| submit()>"OK"</button>
-                <button class="btn" on:click=move |_| st.dialog.set(None)>"Cancel"</button>
+                <button
+                    class="btn primary"
+                    disabled=move || value.with(|v| v.trim().is_empty())
+                    on:click=move |_| submit()
+                >
+                    "OK"
+                </button>
+                <button class="btn" on:click=move |_| st.dialog.set(None)>
+                    "Cancel"
+                </button>
             </div>
         </div>
     }
@@ -1326,14 +1528,20 @@ fn DeleteDialog(text: String, on_ok: impl Fn() + 'static) -> impl IntoView {
             <p>{text}</p>
             <p class="muted">"This action cannot be undone."</p>
             <div class="buttons">
-                <button class="btn danger" node_ref=confirm
+                <button
+                    class="btn danger"
+                    node_ref=confirm
                     on:click=move |_| {
                         st.dialog.set(None);
                         on_ok();
-                    }>
-                    <span class="ic" inner_html=icons::TRASH></span>"Delete"
+                    }
+                >
+                    <span class="ic" inner_html=icons::TRASH></span>
+                    "Delete"
                 </button>
-                <button class="btn" on:click=move |_| st.dialog.set(None)>"Cancel"</button>
+                <button class="btn" on:click=move |_| st.dialog.set(None)>
+                    "Cancel"
+                </button>
             </div>
         </div>
     }
@@ -1371,14 +1579,21 @@ fn PropertiesDialog(entry: Entry) -> impl IntoView {
                 <h2>{entry.name.clone()}</h2>
             </div>
             <dl>
-                <dt>"Type"</dt><dd>{type_label(&entry)}</dd>
-                <dt>"Location"</dt><dd class="mono">{location}</dd>
-                <dt>"Size"</dt><dd>{move || size.get().unwrap_or_else(|| "Calculating…".into())}</dd>
-                <dt>"Modified"</dt><dd>{modified}</dd>
-                <dt>"Permissions"</dt><dd class="mono">{perms}</dd>
+                <dt>"Type"</dt>
+                <dd>{type_label(&entry)}</dd>
+                <dt>"Location"</dt>
+                <dd class="mono">{location}</dd>
+                <dt>"Size"</dt>
+                <dd>{move || size.get().unwrap_or_else(|| "Calculating…".into())}</dd>
+                <dt>"Modified"</dt>
+                <dd>{modified}</dd>
+                <dt>"Permissions"</dt>
+                <dd class="mono">{perms}</dd>
             </dl>
             <div class="buttons">
-                <button class="btn primary" on:click=move |_| st.dialog.set(None)>"Close"</button>
+                <button class="btn primary" on:click=move |_| st.dialog.set(None)>
+                    "Close"
+                </button>
             </div>
         </div>
     }
@@ -1414,10 +1629,24 @@ fn ShortcutsDialog() -> impl IntoView {
         <div class="dialog wide" role="dialog" aria-label="Keyboard shortcuts">
             <h2>"Keyboard Shortcuts"</h2>
             <table class="keys">
-                {KEYS.iter().map(|(k, d)| view! { <tr><td><kbd>{*k}</kbd></td><td>{*d}</td></tr> }).collect_view()}
+                {KEYS
+                    .iter()
+                    .map(|(k, d)| {
+                        view! {
+                            <tr>
+                                <td>
+                                    <kbd>{*k}</kbd>
+                                </td>
+                                <td>{*d}</td>
+                            </tr>
+                        }
+                    })
+                    .collect_view()}
             </table>
             <div class="buttons">
-                <button class="btn primary" on:click=move |_| st.dialog.set(None)>"Close"</button>
+                <button class="btn primary" on:click=move |_| st.dialog.set(None)>
+                    "Close"
+                </button>
             </div>
         </div>
     }
@@ -1466,16 +1695,33 @@ fn StatusBar() -> impl IntoView {
                         let pct = u.progress();
                         let speed = u.speed.map(|s| format!(" · {}", util::format_speed(s))).unwrap_or_default();
                         let crate::upload::Counts { failed, retrying, .. } = crate::upload::counts(&u);
-                        // "photos (97 of 141 files left, 3 failed)"; failures only once there are some.
                         let (name, left) = u.label();
-                        let failed = (failed > 0).then(|| view! { ", " <span class="uwarn">{format!("{failed} failed")}</span> });
-                        let count = left.map(|left| view! { " (" {left} {failed} ")" });
+                        let failed = (failed > 0)
+                            .then(|| {
+                                // "photos (97 of 141 files left, 3 failed)"; failures only once there are some.
+                                view! {
+                                    ", "
+                                    <span class="uwarn">{format!("{failed} failed")}</span>
+                                }
+                            });
+                        let count = left
+                            .map(|left| {
+                                view! {
+                                    " ("
+                                    {left}
+                                    {failed}
+                                    ")"
+                                }
+                            });
                         let retrying = (retrying > 0).then(|| format!(" · {retrying} retrying"));
                         view! {
-                            <button class="upload" class:on=move || st.upload_panel.get()
+                            <button
+                                class="upload"
+                                class:on=move || st.upload_panel.get()
                                 title="Show which files are being uploaded"
                                 aria-expanded=move || if st.upload_panel.get() { "true" } else { "false" }
-                                on:click=move |_| st.upload_panel.update(|v| *v = !*v)>
+                                on:click=move |_| st.upload_panel.update(|v| *v = !*v)
+                            >
                                 <span class="ulabel">"Uploading " {name} {count} "…"</span>
                                 <progress max="1" value=pct.to_string()></progress>
                                 <span class="unum">{format!("{:.0}%{speed}", pct * 100.0)}</span>
@@ -1483,25 +1729,31 @@ fn StatusBar() -> impl IntoView {
                                 <span class="ic uchev" inner_html=icons::CHEVRON></span>
                             </button>
                         }
-                        .into_any()
+                            .into_any()
                     }
                     None => view! { <span>{move || summary.get()}</span> }.into_any(),
                 }}
             </div>
             <Show when=move || matches!(st.view.get(), ViewMode::Icons | ViewMode::Compact)>
                 <label class="zoom" title="Zoom (Ctrl + / Ctrl −)">
-                    <input type="range" min="32" max="192" step="8" aria-label="Zoom"
+                    <input
+                        type="range"
+                        min="32"
+                        max="192"
+                        step="8"
+                        aria-label="Zoom"
                         prop:value=move || st.zoom.get().to_string()
                         on:input=move |ev: ev::Event| {
                             if let Ok(v) = event_target_value(&ev).parse::<u32>() {
                                 st.zoom.set(v);
                             }
-                        }/>
+                        }
+                    />
                 </label>
             </Show>
-            <DiskMeter compact=true/>
+            <DiskMeter compact=true />
             <Show when=move || st.upload_panel.get() && st.upload.with(|u| u.is_some())>
-                <UploadPanel/>
+                <UploadPanel />
             </Show>
         </footer>
     }
@@ -1513,22 +1765,28 @@ fn ParallelPicker() -> impl IntoView {
     let st = use_st();
     let options = [1u32, 2, 3, 4, 6, 8, 12, 16];
     view! {
-        <label class="parallel" title="How many files are uploaded at the same time"
-            on:click=|ev: ev::MouseEvent| ev.stop_propagation()>
+        <label
+            class="parallel"
+            title="How many files are uploaded at the same time"
+            on:click=|ev: ev::MouseEvent| ev.stop_propagation()
+        >
             <span class="ic" inner_html=icons::UPLOAD></span>
             <span class="plabel">"Parallel uploads"</span>
-            <select
-                on:change=move |ev: ev::Event| {
-                    let v = event_target_value(&ev);
-                    st.parallel.set(if v == "default" { None } else { v.parse().ok() });
-                }>
+            <select on:change=move |ev: ev::Event| {
+                let v = event_target_value(&ev);
+                st.parallel.set(if v == "default" { None } else { v.parse().ok() });
+            }>
                 <option value="default" selected=move || st.parallel.get().is_none()>
                     {move || format!("Default ({})", st.default_parallel())}
                 </option>
                 {options
                     .into_iter()
-                    .map(|n| view! {
-                        <option value=n.to_string() selected=move || st.parallel.get() == Some(n)>{n.to_string()}</option>
+                    .map(|n| {
+                        view! {
+                            <option value=n.to_string() selected=move || st.parallel.get() == Some(n)>
+                                {n.to_string()}
+                            </option>
+                        }
                     })
                     .collect_view()}
             </select>
@@ -1631,9 +1889,13 @@ fn UploadPanel() -> impl IntoView {
         };
         let cancel_title = format!("Cancel uploading “{}”", vname(&file.rel));
         view! {
-            <li class="urow" class:done=move || state.get() == Some(FileState::Done) class:now=busy
+            <li
+                class="urow"
+                class:done=move || state.get() == Some(FileState::Done)
+                class:now=busy
                 class:failed=move || matches!(state.get(), Some(FileState::Failed(_)))
-                class:cancelled=move || state.get() == Some(FileState::Cancelled)>
+                class:cancelled=move || state.get() == Some(FileState::Cancelled)
+            >
                 <span class="ic ustate" inner_html=icon></span>
                 <span class="uname" title=full>
                     {shown}
@@ -1641,12 +1903,21 @@ fn UploadPanel() -> impl IntoView {
                 </span>
                 <span class="usize">{detail}</span>
                 <span class="ucancel">
-                    {move || pending().then(|| view! {
-                        <button class="tb" title=cancel_title.clone() aria-label=cancel_title.clone()
-                            on:click=move |_| crate::upload::cancel(st, n)>
-                            <span class="ic" inner_html=icons::CLOSE></span>
-                        </button>
-                    })}
+                    {move || {
+                        pending()
+                            .then(|| {
+                                view! {
+                                    <button
+                                        class="tb"
+                                        title=cancel_title.clone()
+                                        aria-label=cancel_title.clone()
+                                        on:click=move |_| crate::upload::cancel(st, n)
+                                    >
+                                        <span class="ic" inner_html=icons::CLOSE></span>
+                                    </button>
+                                }
+                            })
+                    }}
                 </span>
             </li>
         }
@@ -1658,21 +1929,38 @@ fn UploadPanel() -> impl IntoView {
             <div class="uhead">
                 <div class="utitle">
                     {move || format!("Uploading {}", util::plural(count.get(), "file", "files"))}
-                    {move || dest.get().map(|d| view! { " to " <span class="mono">{d}</span> })}
+                    {move || {
+                        dest.get()
+                            .map(|d| {
+                                view! {
+                                    " to "
+                                    <span class="mono">{d}</span>
+                                }
+                            })
+                    }}
                 </div>
                 <Show when=any_pending>
-                    <button class="btn small" title="Stop every file that hasn't finished uploading"
-                        on:click=move |_| crate::upload::cancel_all(st)>"Cancel All"</button>
+                    <button
+                        class="btn small"
+                        title="Stop every file that hasn't finished uploading"
+                        on:click=move |_| crate::upload::cancel_all(st)
+                    >
+                        "Cancel All"
+                    </button>
                 </Show>
                 {tool_button(icons::CLOSE, "Close", move || st.upload_panel.set(false))}
             </div>
             <progress max="1" value=move || pct().to_string()></progress>
             <div class="ustats">{stats}</div>
-            <ParallelPicker/>
-            <div class="unote">"Every file is checked against its checksum on the server; damaged or interrupted files are sent again. Files you add now join this upload."</div>
+            <ParallelPicker />
+            <div class="unote">
+                "Every file is checked against its checksum on the server; damaged or interrupted files are sent again. Files you add now join this upload."
+            </div>
             <ul class="ulist" node_ref=list>
-                <For each=move || 0..count.get().min(UPLOAD_ROWS_MAX) key=|n| *n children=row/>
-                {move || (hidden() > 0).then(|| view! { <li class="urow more">{format!("…and {} more", hidden())}</li> })}
+                <For each=move || 0..count.get().min(UPLOAD_ROWS_MAX) key=|n| *n children=row />
+                {move || {
+                    (hidden() > 0).then(|| view! { <li class="urow more">{format!("…and {} more", hidden())}</li> })
+                }}
             </ul>
         </div>
     }

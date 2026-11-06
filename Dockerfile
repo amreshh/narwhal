@@ -10,15 +10,19 @@
 #
 #   docker build -t narwhal:latest .
 #   docker run --rm -p 8080:8080 -v "$PWD/data:/data" narwhal:latest
+#
+# Base images are pinned by digest and written out in full (not through ARGs)
+# so Dependabot can update them.
 
-ARG RUST_VERSION=1.97
 ARG TRUNK_VERSION=0.22.1
 ARG CHEF_VERSION=0.1.78
 
-FROM rust:${RUST_VERSION}-bookworm AS chef
+FROM rust:1.99-bookworm@sha256:e6f2cff35d0f309acf8433b4f05878ed77092602c5065cc81801177da0bb3a9c AS chef
 ARG TRUNK_VERSION
 ARG CHEF_VERSION
 ARG TARGETARCH
+# A piped command (curl | tar) fails when any part of it fails.
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 WORKDIR /src
 
 RUN rustup target add wasm32-unknown-unknown \
@@ -58,14 +62,17 @@ COPY server server
 COPY frontend frontend
 
 # The Trunk cache mount keeps wasm-bindgen and wasm-opt between local builds.
-RUN --mount=type=cache,target=/root/.cache/trunk \
-    cd frontend && trunk build --release && cd .. \
- && cargo build --release --locked -p narwhal-server \
+WORKDIR /src/frontend
+RUN --mount=type=cache,target=/root/.cache/trunk trunk build --release
+WORKDIR /src
+RUN cargo build --release --locked -p narwhal-server \
  && mkdir -p /out/data \
  && cp target/release/narwhal /out/narwhal \
  && cp -r frontend/dist /out/static
 
-FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
+# Debian 13: Debian 12 only gets long-term-support fixes now. The binary is
+# built on Debian 12, which runs fine on Debian 13's newer glibc.
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:08476c244888bfb425bae1ae4dd7c17f093e972aab8426883d97f3c6f280f7c1 AS runtime
 WORKDIR /app
 COPY --from=build /out/narwhal /app/narwhal
 COPY --from=build /out/static /app/static

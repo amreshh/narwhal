@@ -9,3 +9,6 @@ description = "Text and cell previews of office documents (docx, xlsx, pptx, odt
 # Unzipping Office Open XML and OpenDocument files, with a size limit.
 miniz_oxide = "0.9"
 quick-xml = "0.42"
+
+[lints]
+workspace = true

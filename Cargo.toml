@@ -12,3 +12,9 @@ opt-level = 3
 lto = true
 codegen-units = 1
 strip = true
+
+# Shared by every crate (each has `[lints] workspace = true`).
+[workspace.lints.rust]
+# There is no unsafe code, and for a server whose job is to keep access
+# inside one folder, that's worth guaranteeing.
+unsafe_code = "forbid"

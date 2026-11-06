@@ -1,0 +1,6 @@
+# Formats the markup inside view! macros (rustfmt leaves it alone).
+# Same width as rustfmt.toml; braces and tag styles are kept as written.
+max_width = 120
+tab_spaces = 4
+attr_value_brace_style = "Preserve"
+closing_tag_style = "Preserve"

@@ -4,20 +4,42 @@
 # settings (alerts stay on): these version updates bump vulnerable deps too.
 version: 2
 updates:
+  # New releases wait a week before they're proposed, so a compromised one
+  # is usually pulled before it reaches this repo. Dependabot alerts still
+  # report vulnerable crates right away.
   - package-ecosystem: cargo
     directory: /            # workspace root: shared, server, frontend + Cargo.lock
     target-branch: dev
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     groups:
       cargo-minor-patch:
         update-types: [minor, patch]
 
+  # Workflow actions are pinned to commits; this updates the commit and the
+  # version comment next to it.
   - package-ecosystem: github-actions
     directory: /
     target-branch: dev
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     groups:
       actions:
+        patterns: ["*"]
+
+  # The Dockerfile's base images (Rust builder, distroless runtime), pinned
+  # by digest: new Rust versions and rebuilt images with security fixes.
+  # No cooldown: those fixes shouldn't wait, and the container workflow
+  # scans the image before pushing it.
+  - package-ecosystem: docker # zizmor: ignore[dependabot-cooldown]
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: weekly
+    groups:
+      base-images:
         patterns: ["*"]

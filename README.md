@@ -90,14 +90,31 @@ NARWHAL_ROOT=$HOME/some-folder NARWHAL_STATIC_DIR=frontend/dist cargo run -p nar
 For UI work with live reload, run the server as above and in another terminal
 `cd frontend && trunk serve` (port 8081; `/api` is proxied to 8080).
 
-Tests: `cargo test -p narwhal-server -p narwhal-shared -p narwhal-office` (path traversal,
-symlink escape and races, copy/move/rename/delete, Trash, search, naming, document formats).
-To check the document readers on your own files:
+Tests: `cargo test -p narwhal-server -p narwhal-shared -p narwhal-office -p narwhal-frontend`
+(path traversal, symlink escape and races, copy/move/rename/delete, Trash, search, naming,
+document formats, text encodings). To check the document readers on your own files:
 `OFFICE_SAMPLES=some/folder cargo test -p narwhal-office samples -- --ignored --nocapture`.
 
-Formatting and lints (checked by the `lint` workflow): `cargo fmt --all`, then
+Formatting and lints: `cargo fmt --all && leptosfmt frontend/src` (the second
+formats the markup in `view!` macros; `cargo install leptosfmt`), then
 `cargo clippy -p narwhal-server -p narwhal-shared -p narwhal-office --all-targets` and
 `cargo clippy -p narwhal-frontend --target wasm32-unknown-unknown`.
+
+Fuzzing the document readers (needs nightly Rust and `cargo install cargo-fuzz`):
+`cp Cargo.lock fuzz/ && cargo +nightly fuzz run zip_parts` (targets: `parse`,
+`zip_parts`, `cfb_streams`).
+
+### CI
+
+| Workflow | What it does |
+| --- | --- |
+| `container` | Tests; builds the image, scans it with Trivy (fails on fixable HIGH/CRITICAL vulnerabilities) and pushes it; releases from `main` |
+| `lint` | rustfmt + leptosfmt, clippy, typos, actionlint, hadolint, kubeconform |
+| `security` | zizmor (workflow security); also weekly. CodeQL runs through GitHub's default setup |
+| `fuzz` | Fuzzes the document readers weekly, and when `office/` or `fuzz/` change |
+
+Actions are pinned to commits and the Dockerfile's base images to digests;
+Dependabot keeps both up to date.
 
 ## Container image
 
