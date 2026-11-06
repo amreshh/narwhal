@@ -1,5 +1,7 @@
 # Dependabot version updates. Only read from the default branch (main);
-# PRs are opened against dev. Security-fix PRs ignore this file and target main.
+# PRs are opened against dev. Security-fix PRs would ignore target-branch and
+# go to main, so "Dependabot security updates" is turned off in the repo
+# settings (alerts stay on): these version updates bump vulnerable deps too.
 version: 2
 updates:
   - package-ecosystem: cargo
