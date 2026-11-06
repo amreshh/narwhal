@@ -32,8 +32,10 @@ impl<'a> Zip<'a> {
             // ZIP64: the locator just before points to the ZIP64 record.
             let loc = eocd.checked_sub(20)?;
             if data.get(loc..loc + 4)? == b"PK\x06\x07" {
+                // Offsets come from the file and can be anything, so adding
+                // to them is checked (here and below).
                 let rec = usize::try_from(u64le(data, loc + 8)?).ok()?;
-                if data.get(rec..rec + 4)? != b"PK\x06\x06" {
+                if data.get(rec..rec.checked_add(4)?)? != b"PK\x06\x06" {
                     return None;
                 }
                 count = u64le(data, rec + 32)?;
@@ -43,7 +45,7 @@ impl<'a> Zip<'a> {
         let mut entries = Vec::new();
         let mut at = usize::try_from(dir).ok()?;
         for _ in 0..count.min(MAX_ENTRIES) {
-            if data.get(at..at + 4) != Some(b"PK\x01\x02") {
+            if at.checked_add(4).and_then(|end| data.get(at..end)) != Some(b"PK\x01\x02") {
                 break;
             }
             let flags = u16le(data, at + 8)?;
@@ -95,7 +97,7 @@ impl<'a> Zip<'a> {
     /// (or is damaged, and only its beginning could be read).
     pub fn read(&self, name: &str, limit: usize) -> Option<(Vec<u8>, bool)> {
         let e = self.entry(name)?;
-        if e.encrypted || self.data.get(e.offset..e.offset + 4)? != b"PK\x03\x04" {
+        if e.encrypted || self.data.get(e.offset..e.offset.checked_add(4)?)? != b"PK\x03\x04" {
             return None;
         }
         let name_len = usize::from(u16le(self.data, e.offset + 26)?);
@@ -193,6 +195,31 @@ pub(crate) mod tests {
         assert_eq!(zip.read("a/b.xml", 2), Some((b"<x".to_vec(), true)));
         assert!(zip.read("missing", 10).is_none());
         assert_eq!(zip.names().count(), 2);
+    }
+
+    #[test]
+    fn offsets_that_would_overflow_are_refused() {
+        // Found by fuzzing: ZIP64 records pointing near the end of the address space.
+        let found: [&[u8]; 2] = [
+            b"PK\x01\x02PK\x05\x06\x4b\xb1\x1a\xe1\xfc\xff\xff\xff\x00PK\x06\x07\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\
+              PK\x01\x02PK\x05\x06\x4b\xb1\x1a\xe1\xfc\xff\xff\xff\x00PK\x06\x07\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\
+              \xff\xff\xff\xff\x24\xff\x00\x00",
+            b"PK\x21\x00\x01PK\x06\x07PKPS\xfc\xff\xff\xff\xff\xff\xff\xff\xbb\x4b\x09\xfbPK\x05\x06\xd3\xff\x4e\x00\
+              \xff\xff\xff\xff\x18\x00\x00\x00\x00\x00\x00\x00\x00\x02",
+        ];
+        for data in found {
+            assert!(crate::parse(data).is_err());
+        }
+        // A ZIP64 extra field that moves the entry to offset u64::MAX.
+        let mut data = stored(&[("a.xml", b"x")]);
+        let dir = 30 + 5 + 1; // after the local header, the name and the content
+        data[dir + 30..dir + 32].copy_from_slice(&12u16.to_le_bytes()); // extra field length
+        data[dir + 42..dir + 46].copy_from_slice(&[0xFF; 4]); // offset: in the extra field
+        let name_end = dir + 46 + 5;
+        data.splice(name_end..name_end, [1, 0, 8, 0].into_iter().chain([0xFF; 8]));
+        let zip = Zip::open(&data).unwrap();
+        assert!(zip.has("a.xml"));
+        assert!(zip.read("a.xml", 100).is_none());
     }
 
     #[test]
