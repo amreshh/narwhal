@@ -1,17 +1,31 @@
-name: container
+name: ci
 
+# Every push and pull request runs this one pipeline. The checks run side by
+# side; the image is only built when all of them pass:
+#
+#   plan ─┬─ test ─────┐
+#         ├─ lint ─────┤
+#         ├─ security ─┼─ build ─┬─ release (main)
+#         ├─ fuzz ─────┘         │
+#         └─ promote (main) ─────┘
+#
+# lint, security and fuzz are in their own files and called from here;
+# security and fuzz also run weekly on their own. Reports from the image scan,
+# zizmor and hadolint go to Security → Code scanning, and the image scan's
+# table to the run summary. `checks` sums up the checks for branch rules.
+#
 # dev            -> ghcr.io/<repo>:<short-sha>, :latest
 #                   (skipped when the files didn't change, e.g. dev reset to main
 #                   after a merge)
 # push to main   -> next version (see below), then git tag v1.2.3 + GitHub Release
 #                   with generated notes. The image is not rebuilt: the dev image
-#                   of the merged PR (same files, already tested) is retagged as
+#                   of the merged PR (same files, already checked) is retagged as
 #                   :1.2.3, :1.2, :1. Only when no such image exists (e.g. a PR
-#                   straight into main) are tests and the build run here.
+#                   straight into main) do the checks and the build run here.
 # tag v1.2.3     -> ghcr.io/<repo>:1.2.3, :1.2, :1  (manual; tag must be on main)
 #                   (no major-only tag while on 0.x: 0.x minors can break)
 # tag v1.2.3-rc1 -> ghcr.io/<repo>:1.2.3-rc1 only
-# pull requests  -> tests + build only, nothing pushed
+# pull requests  -> checks + build only, nothing pushed
 #
 # Version on main: bumps the patch of the latest vX.Y.Z tag. Put "#minor" or
 # "#major" in a commit message (e.g. the merge commit) to bump that instead.
@@ -82,7 +96,7 @@ jobs:
           echo "Releasing v$version (previous: ${last:-none})"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      # After a merge, dev is reset to main: same files as before, nothing new to test or build.
+      # After a merge, dev is reset to main: same files as before, nothing new to check or build.
       - name: Check dev content changed
         id: dev
         if: github.ref == 'refs/heads/dev'
@@ -96,7 +110,7 @@ jobs:
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
 
-      # The merged PR's head was pushed to dev, which tested it and pushed ghcr.io/<repo>:<short-sha>.
+      # The merged PR's head was pushed to dev, which checked it and pushed ghcr.io/<repo>:<short-sha>.
       # If main now has exactly those files, that image is what we release.
       - name: Find the merged PR's dev image
         id: pr
@@ -134,9 +148,9 @@ jobs:
             echo "$CANDIDATE not found, will build"
           fi
 
-  # Tests: nothing is built or published unless they pass. Formatting and
-  # lints run in their own workflow (lint.yaml).
-  # Skipped on main when the dev image is reused (that code was already tested).
+  # The checks (test, lint, security, fuzz) all run under the same condition:
+  # skipped when dev didn't change, and on main when the dev image is reused
+  # (those files were already checked on dev).
   test:
     needs: plan
     if: >-
@@ -163,14 +177,69 @@ jobs:
       - name: Tests
         run: cargo test --locked -p narwhal-server -p narwhal-shared -p narwhal-office -p narwhal-frontend
 
-  # Runs whenever tests ran and passed (see the test job for when that is).
+  # Formatting and lints (lint.yaml).
+  lint:
+    needs: plan
+    if: >-
+      !cancelled() && needs.plan.result != 'failure' && needs.plan.outputs.skip != 'true' &&
+      (github.ref != 'refs/heads/main' || (needs.plan.outputs.version != '' && needs.plan.outputs.image == ''))
+    uses: $/.github/workflows/lint.yaml
+    permissions:
+      contents: read
+      security-events: write # hadolint's report
+
+  # zizmor on the workflows (security.yaml).
+  security:
+    needs: plan
+    if: >-
+      !cancelled() && needs.plan.result != 'failure' && needs.plan.outputs.skip != 'true' &&
+      (github.ref != 'refs/heads/main' || (needs.plan.outputs.version != '' && needs.plan.outputs.image == ''))
+    uses: $/.github/workflows/security.yaml
+    permissions:
+      contents: read
+      security-events: write # zizmor's report
+
+  # A short fuzzing run of the document readers (fuzz.yaml); the weekly one is longer.
+  fuzz:
+    needs: plan
+    if: >-
+      !cancelled() && needs.plan.result != 'failure' && needs.plan.outputs.skip != 'true' &&
+      (github.ref != 'refs/heads/main' || (needs.plan.outputs.version != '' && needs.plan.outputs.image == ''))
+    uses: $/.github/workflows/fuzz.yaml
+    with:
+      seconds: "60"
+    permissions:
+      contents: read
+
+  # The one check to require in branch rules: fails when any check failed or
+  # was cancelled. (A skipped job counts as passed, so requiring build alone
+  # would let a failed lint through: build is then skipped.)
+  checks:
+    needs: [plan, test, lint, security, fuzz]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      - name: All checks passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "plan, test, lint, security, fuzz: $RESULTS"
+          case " $RESULTS " in
+            *" failure "* | *" cancelled "*) exit 1 ;;
+          esac
+
+  # Runs when all the checks ran and passed (see test for when they run).
   build:
-    needs: [plan, test]
-    if: ${{ !cancelled() && needs.test.result == 'success' }}
+    needs: [plan, test, lint, security, fuzz]
+    if: >-
+      !cancelled() && needs.test.result == 'success' && needs.lint.result == 'success' &&
+      needs.security.result == 'success' && needs.fuzz.result == 'success'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
+      security-events: write # the image scan's report
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -222,17 +291,39 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Fails on HIGH or CRITICAL vulnerabilities that have a fix (in the base
-      # image's Debian packages). To accept one, add its ID to .trivyignore
-      # with a comment saying why.
+      # One scan, used three times: the run summary, code scanning, and the
+      # check that decides whether the image is pushed.
       - name: Scan image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: narwhal:scan
           version: v0.76.2
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: "1"
+          format: json
+          output: trivy.json
+
+      - name: Image scan report
+        run: |
+          jq -r -f .github/trivy-summary.jq trivy.json >> "$GITHUB_STEP_SUMMARY"
+          trivy convert --format sarif --output trivy.sarif trivy.json
+
+      - name: Upload image scan to code scanning
+        # Pull requests from forks get a read-only token.
+        if: ${{ !github.event.pull_request.head.repo.fork }}
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          sarif_file: trivy.sarif
+          category: trivy-image
+
+      # Fails on HIGH or CRITICAL vulnerabilities that have a fix (in the base
+      # image's Debian packages). To accept one, add its ID to .trivyignore
+      # with a comment saying why.
+      - name: Check image scan
+        run: |
+          n=$(jq '[.Results[]?.Vulnerabilities[]? | select((.Severity == "HIGH" or .Severity == "CRITICAL") and (.FixedVersion // "") != "")] | length' trivy.json)
+          if [ "$n" -gt 0 ]; then
+            echo "::error::$n HIGH or CRITICAL vulnerabilities with a fix in the image, see the run summary"
+            exit 1
+          fi
 
       # Same build, all layers from the cache.
       - name: Push
@@ -267,48 +358,6 @@ jobs:
       - name: Metadata
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
-        with:
-          images: ghcr.io/${{ github.repository }}
-          flavor: latest=false
-          # Same semver tags as the build job.
-          tags: |
-            type=semver,pattern={{version}},value=${{ needs.plan.outputs.version }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ needs.plan.outputs.version }}
-            type=semver,pattern={{major}},value=${{ needs.plan.outputs.version }},enable=${{ !startsWith(needs.plan.outputs.version, '0.') }}
-
-      # Copies the manifest under the new tags; no layers are rebuilt or re-uploaded.
-      - name: Retag dev image
-        env:
-          SOURCE: ${{ needs.plan.outputs.image }}
-          TAGS: ${{ steps.meta.outputs.tags }}
-        run: |
-          args=()
-          while read -r tag; do
-            if [ -n "$tag" ]; then args+=(-t "$tag"); fi
-          done <<< "$TAGS"
-          docker buildx imagetools create "${args[@]}" "$SOURCE"
-
-  # main: give the already-built dev image its release tags.
-  promote:
-    needs: plan
-    if: needs.plan.outputs.version != '' && needs.plan.outputs.image != ''
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: docker/setup-buildx-action@v4
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Metadata
-        id: meta
-        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository }}
           flavor: latest=false

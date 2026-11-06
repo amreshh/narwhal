@@ -1,23 +1,17 @@
 name: security
 
-# zizmor: security problems in the GitHub Actions workflows (fails the run).
-# Also runs weekly, so newly reported problems with the actions in use show up.
+# zizmor: security problems in the GitHub Actions workflows. Called by the ci
+# workflow; also runs weekly, so newly reported problems with the actions in
+# use show up even when nothing changes here.
 #
 # CodeQL runs through GitHub's default setup (repository settings → Advanced
 # Security), not here: a CodeQL workflow can't upload while that's on. The
-# container image is scanned in the container workflow, before it's pushed.
+# container image is scanned in the ci workflow, before it's pushed.
 on:
-  push:
-    branches: [dev, main]
-  pull_request:
-    branches: [main, dev]
+  workflow_call:
   schedule:
     - cron: "17 4 * * 1" # Mondays, 04:17 UTC
   workflow_dispatch:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -25,13 +19,26 @@ permissions:
 jobs:
   zizmor:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write # upload the report
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: zizmorcore/zizmor-action@45d7276c9ca790aabd705e31ca99c6185c3e76dd # v0.8.1
+      # SARIF to Security → Code scanning. zizmor never fails in this mode,
+      # so the next step does the checking.
+      - name: zizmor report
+        if: ${{ !github.event.pull_request.head.repo.fork }} # forks get a read-only token
+        uses: zizmorcore/zizmor-action@45d7276c9ca790aabd705e31ca99c6185c3e76dd # v0.8.1
         with:
           version: 1.32.0
-          # Report in the log and fail, instead of uploading to the Security tab.
+
+      # Fails on findings and marks them on the workflow lines.
+      - name: zizmor
+        uses: zizmorcore/zizmor-action@45d7276c9ca790aabd705e31ca99c6185c3e76dd # v0.8.1
+        with:
+          version: 1.32.0
           advanced-security: false
+          annotations: true

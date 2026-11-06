@@ -1,29 +1,26 @@
 name: fuzz
 
 # Feeds the office document readers (office/) random and malformed files and
-# fails on a panic, a hang (10 s) or runaway memory use. Weekly for 10 minutes
-# per target, and for 2 minutes when office/ or fuzz/ change.
+# fails on a panic, a hang (10 s) or runaway memory use. The ci workflow runs
+# it for a minute per target on every push and pull request; on its own it
+# runs weekly for 10 minutes per target, building on the inputs found so far.
 #
 # A crashing input is uploaded as an artifact. Reproduce it with
 #   cp Cargo.lock fuzz/ && cargo +nightly fuzz run <target> <file>
 on:
+  workflow_call:
+    inputs:
+      seconds:
+        description: Seconds per target
+        type: string
+        default: "60"
   schedule:
     - cron: "43 3 * * 1" # Mondays, 03:43 UTC
-  push:
-    branches: [dev]
-    paths: ["office/**", "fuzz/**", ".github/workflows/fuzz.yaml"]
-  pull_request:
-    branches: [main, dev]
-    paths: ["office/**", "fuzz/**", ".github/workflows/fuzz.yaml"]
   workflow_dispatch:
     inputs:
       seconds:
         description: Seconds per target
         default: "300"
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -41,7 +38,7 @@ jobs:
         target: [parse, zip_parts, cfb_streams]
     env:
       TARGET: ${{ matrix.target }}
-      SECONDS_PER_TARGET: ${{ inputs.seconds || (github.event_name == 'schedule' && '600') || '120' }}
+      SECONDS_PER_TARGET: ${{ inputs.seconds || (github.event_name == 'schedule' && '600') || '60' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

@@ -1,27 +1,20 @@
 name: lint
 
-# Formatting and lints. Separate from the container workflow: a failure shows
-# on the commit or PR but doesn't stop images from being built.
+# Formatting and lints, called by the ci workflow (alongside the tests,
+# before the image is built). Can also be run by hand from the Actions tab.
 #
 #   fmt          rustfmt (rustfmt.toml) and leptosfmt for view! markup
 #                (leptosfmt.toml). Fix with: cargo fmt --all && leptosfmt frontend/src
 #   clippy       warnings are errors
 #   typos        spell check (exceptions in typos.toml)
 #   actionlint   the workflow files, including their shell scripts
-#   hadolint     the Dockerfile
+#   hadolint     the Dockerfile; its report also goes to Security → Code scanning
 #   kubeconform  the Kubernetes manifests in deploy/
 #
 # Actions are pinned to commits; Dependabot keeps them current.
 on:
-  push:
-    branches: [dev, main]
-  pull_request:
-    branches: [main, dev]
+  workflow_call:
   workflow_dispatch:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -103,12 +96,33 @@ jobs:
 
   hadolint:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write # upload the report
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
+      - name: hadolint report
+        uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
+        with:
+          dockerfile: Dockerfile
+          format: sarif
+          output-file: hadolint.sarif
+          no-fail: true
+
+      - name: Upload report to code scanning
+        # Pull requests from forks get a read-only token.
+        if: ${{ !github.event.pull_request.head.repo.fork }}
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          sarif_file: hadolint.sarif
+          category: hadolint
+
+      # Same check, readable in the log, and fails the job.
+      - name: hadolint
+        uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
         with:
           dockerfile: Dockerfile
           failure-threshold: warning

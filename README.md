@@ -106,15 +106,20 @@ Fuzzing the document readers (needs nightly Rust and `cargo install cargo-fuzz`)
 
 ### CI
 
+Every push and pull request runs one pipeline, `ci`: the tests, `lint`, `security`
+and a short `fuzz` run side by side, then (if all pass) the image build, scan and
+push, and on `main` the release.
+
 | Workflow | What it does |
 | --- | --- |
-| `container` | Tests; builds the image, scans it with Trivy (fails on fixable HIGH/CRITICAL vulnerabilities) and pushes it; releases from `main` |
+| `ci` | The pipeline; builds the image, scans it with Trivy (fails on fixable HIGH/CRITICAL vulnerabilities; table in the run summary) and pushes it; releases from `main`. Its `checks` job is the one to require in branch rules |
 | `lint` | rustfmt + leptosfmt, clippy, typos, actionlint, hadolint, kubeconform |
 | `security` | zizmor (workflow security); also weekly. CodeQL runs through GitHub's default setup |
-| `fuzz` | Fuzzes the document readers weekly, and when `office/` or `fuzz/` change |
+| `fuzz` | Fuzzes the document readers: a minute per target in `ci`, 10 minutes weekly |
 
-Actions are pinned to commits and the Dockerfile's base images to digests;
-Dependabot keeps both up to date.
+Reports from Trivy, zizmor and hadolint go to Security → Code scanning. Actions
+are pinned to commits and the Dockerfile's base images to digests; Dependabot
+keeps both up to date.
 
 ## Container image
 

@@ -1,0 +1,8 @@
+# actionlint settings: https://github.com/rhysd/actionlint/blob/main/docs/config.md
+paths:
+  .github/workflows/ci.yaml:
+    ignore:
+      # GitHub's self-repository syntax for calling a workflow in this repo
+      # (uses: $/...), which zizmor asks for, is newer than actionlint 1.7.12.
+      # Remove once actionlint understands it.
+      - 'reusable workflow call "\$/\.github/workflows/[a-z]+\.yaml" at "uses" is not following the format'
