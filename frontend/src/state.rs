@@ -127,20 +127,28 @@ impl Upload {
         self.files.iter().all(|f| f.dest == first).then_some(first)
     }
 
-    /// "photo.jpg", "Holiday (141 files)" or "141 files".
-    pub fn label(&self) -> String {
+    /// What the upload is called, and how many of its files are left:
+    /// ("photo.jpg", None), ("Holiday", "97 of 141 files left") or
+    /// ("141 files", "97 left").
+    pub fn label(&self) -> (String, Option<String>) {
         let top = |f: &UpFile| f.rel.split('/').next().unwrap_or("").to_string();
+        let (n, left) = (self.files.len(), self.left());
         match self.files.as_slice() {
-            [one] => vname(&one.rel).to_string(),
+            [one] => (vname(&one.rel).to_string(), None),
             [first, ..]
                 if self.dest().is_some()
                     && first.rel.contains('/')
                     && self.files.iter().all(|f| top(f) == top(first)) =>
             {
-                format!("{} ({} files)", top(first), self.files.len())
+                (top(first), Some(format!("{left} of {n} files left")))
             }
-            files => format!("{} files", files.len()),
+            _ => (format!("{n} files"), Some(format!("{left} left"))),
         }
+    }
+
+    /// Files not finished yet (not uploaded, failed or cancelled).
+    pub fn left(&self) -> usize {
+        self.states.iter().filter(|s| s.is_pending()).count()
     }
 
     pub fn progress(&self) -> f64 {

@@ -1458,21 +1458,20 @@ fn StatusBar() -> impl IntoView {
                         let pct = u.progress();
                         let speed = u.speed.map(|s| format!(" · {}", util::format_speed(s))).unwrap_or_default();
                         let crate::upload::Counts { failed, retrying, .. } = crate::upload::counts(&u);
-                        let trouble = match (retrying, failed) {
-                            (0, 0) => String::new(),
-                            (r, 0) => format!(" · {r} retrying"),
-                            (0, f) => format!(" · {f} failed"),
-                            (r, f) => format!(" · {r} retrying, {f} failed"),
-                        };
+                        // "photos (97 of 141 files left, 3 failed)"; failures only once there are some.
+                        let (name, left) = u.label();
+                        let failed = (failed > 0).then(|| view! { ", " <span class="uwarn">{format!("{failed} failed")}</span> });
+                        let count = left.map(|left| view! { " (" {left} {failed} ")" });
+                        let retrying = (retrying > 0).then(|| format!(" · {retrying} retrying"));
                         view! {
                             <button class="upload" class:on=move || st.upload_panel.get()
                                 title="Show which files are being uploaded"
                                 aria-expanded=move || if st.upload_panel.get() { "true" } else { "false" }
                                 on:click=move |_| st.upload_panel.update(|v| *v = !*v)>
-                                <span class="ulabel">{format!("Uploading {}…", u.label())}</span>
+                                <span class="ulabel">"Uploading " {name} {count} "…"</span>
                                 <progress max="1" value=pct.to_string()></progress>
                                 <span class="unum">{format!("{:.0}%{speed}", pct * 100.0)}</span>
-                                {(!trouble.is_empty()).then(|| view! { <span class="uwarn">{trouble}</span> })}
+                                {retrying.map(|r| view! { <span class="uwarn">{r}</span> })}
                                 <span class="ic uchev" inner_html=icons::CHEVRON></span>
                             </button>
                         }

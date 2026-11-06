@@ -484,7 +484,7 @@ kbd { font-family: var(--mono); font-size: 12px; }
   border-radius: var(--radius); color: inherit; font: inherit; cursor: pointer;
 }
 .upload:hover, .upload.on { background: var(--hover); border-color: var(--sel-border); }
-.upload .ulabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.upload .ulabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; font-variant-numeric: tabular-nums; }
 .upload .unum { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .upload progress { width: 140px; height: 8px; flex: none; accent-color: var(--accent); }
 .upload .uchev { transform: rotate(-90deg); transition: transform 0.1s; }
