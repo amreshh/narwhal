@@ -1,0 +1,60 @@
+name: Scan image
+description: >-
+  Scans a container image with Trivy: a table in the job summary, the full
+  report (SARIF) to Security → Code scanning, and a failure on HIGH or
+  CRITICAL vulnerabilities that have a fix. To accept one, add its ID to
+  .trivyignore (in the checked-out repo) with a comment saying why.
+inputs:
+  image:
+    description: The image, in the runner's Docker or in a registry it's logged in to.
+    required: true
+runs:
+  using: composite
+  steps:
+    # One scan, used three times: the summary, code scanning and the check.
+    - name: Scan
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+      with:
+        image-ref: ${{ inputs.image }}
+        version: v0.76.2
+        format: json
+        output: trivy.json
+
+    # The table also stays in trivy-summary.md (for the pull request comment).
+    # It links to this run's findings in code scanning: the pull request's,
+    # or the branch's.
+    - name: Report
+      shell: bash
+      env:
+        SUMMARY: ${{ github.action_path }}/summary.jq
+        PR: ${{ github.event.pull_request.number }}
+      run: |
+        if [ -n "$PR" ]; then
+          where="pr:$PR "
+        elif [[ "$GITHUB_REF" == refs/heads/* ]]; then
+          where="branch:$GITHUB_REF_NAME "
+        else
+          where=""
+        fi
+        query=$(jq -rn --arg q "is:open ${where}tool:Trivy" '$q | @uri')
+        url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/security/code-scanning?query=$query"
+        jq -r --arg url "$url" -f "$SUMMARY" trivy.json > trivy-summary.md
+        cat trivy-summary.md >> "$GITHUB_STEP_SUMMARY"
+        trivy convert --format sarif --output trivy.sarif trivy.json
+
+    - name: Upload to code scanning
+      # Pull requests from forks get a read-only token.
+      if: ${{ !github.event.pull_request.head.repo.fork }}
+      uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+      with:
+        sarif_file: trivy.sarif
+        category: trivy-image
+
+    - name: Check
+      shell: bash
+      run: |
+        n=$(jq '[.Results[]?.Vulnerabilities[]? | select((.Severity == "HIGH" or .Severity == "CRITICAL") and (.FixedVersion // "") != "")] | length' trivy.json)
+        if [ "$n" -gt 0 ]; then
+          echo "::error::$n HIGH or CRITICAL vulnerabilities with a fix in the image, see the job summary"
+          exit 1
+        fi

@@ -1,31 +1,31 @@
 name: ci
 
-# Every push and pull request runs this one pipeline. The checks run side by
-# side; the image is only built when all of them pass:
+# What runs when:
+#
+#   push to dev    tests, then build ghcr.io/<repo>:<short-sha> and :latest
+#                  (skipped when the files didn't change, e.g. dev reset to
+#                  main after a merge)
+#   pull request   tests, lint, security and fuzzing side by side, then build
+#                  and scan the image (nothing pushed). A comment on the PR
+#                  sums up the results.
+#   push to main   the same checks, then the release build: the next version
+#                  (see below) as :1.2.3, :1.2, :1, a git tag v1.2.3 and a
+#                  GitHub Release with generated notes
+#   tag v1.2.3     the same checks, then :1.2.3, :1.2, :1 (manual; the tag
+#                  must be on main). No major-only tag while on 0.x: 0.x
+#                  minors can break. A tag like v1.2.3-rc1 gets only that tag.
 #
 #   plan ─┬─ test ─────┐
-#         ├─ lint ─────┤
-#         ├─ security ─┼─ build ─┬─ release (main)
-#         ├─ fuzz ─────┘         │
-#         └─ promote (main) ─────┘
+#         ├─ lint ─────┤               ┌─ release (main)
+#         ├─ security ─┼─── build ─────┤
+#         └─ fuzz ─────┘               └─ report (pull requests)
 #
 # lint, security and fuzz are in their own files and called from here;
-# security and fuzz also run weekly on their own. Reports from the image scan,
-# zizmor and hadolint go to Security → Code scanning, and the image scan's
-# table to the run summary. `checks` sums up the checks for branch rules.
-#
-# dev            -> ghcr.io/<repo>:<short-sha>, :latest
-#                   (skipped when the files didn't change, e.g. dev reset to main
-#                   after a merge)
-# push to main   -> next version (see below), then git tag v1.2.3 + GitHub Release
-#                   with generated notes. The image is not rebuilt: the dev image
-#                   of the merged PR (same files, already checked) is retagged as
-#                   :1.2.3, :1.2, :1. Only when no such image exists (e.g. a PR
-#                   straight into main) do the checks and the build run here.
-# tag v1.2.3     -> ghcr.io/<repo>:1.2.3, :1.2, :1  (manual; tag must be on main)
-#                   (no major-only tag while on 0.x: 0.x minors can break)
-# tag v1.2.3-rc1 -> ghcr.io/<repo>:1.2.3-rc1 only
-# pull requests  -> checks + build only, nothing pushed
+# security and fuzz also run weekly on their own. The image is scanned with
+# Trivy (.github/actions/scan-image): a table in the run summary, and builds
+# fail on HIGH or CRITICAL vulnerabilities that have a fix. Reports from
+# Trivy, zizmor and hadolint go to Security → Code scanning; image-scan.yaml
+# rescans the latest release daily. `checks` sums up the checks for branch rules.
 #
 # Version on main: bumps the patch of the latest vX.Y.Z tag. Put "#minor" or
 # "#major" in a commit message (e.g. the merge commit) to bump that instead.
@@ -54,10 +54,8 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-      packages: read
     outputs:
       version: ${{ steps.next.outputs.version }}
-      image: ${{ steps.exists.outputs.image }}
       skip: ${{ steps.dev.outputs.skip }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -96,7 +94,7 @@ jobs:
           echo "Releasing v$version (previous: ${last:-none})"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      # After a merge, dev is reset to main: same files as before, nothing new to check or build.
+      # After a merge, dev is reset to main: same files as before, nothing new to test or build.
       - name: Check dev content changed
         id: dev
         if: github.ref == 'refs/heads/dev'
@@ -110,52 +108,12 @@ jobs:
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
 
-      # The merged PR's head was pushed to dev, which checked it and pushed ghcr.io/<repo>:<short-sha>.
-      # If main now has exactly those files, that image is what we release.
-      - name: Find the merged PR's dev image
-        id: pr
-        if: steps.next.outputs.version != ''
-        run: |
-          tree() { gh api "repos/$GITHUB_REPOSITORY/commits/$1" --jq .commit.tree.sha 2>/dev/null || true; }
-          head=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" \
-            --jq "[.[] | select(.merge_commit_sha == \"$GITHUB_SHA\")][0].head.sha // empty" || true)
-          if [ -z "$head" ]; then
-            echo "No merged PR found for $GITHUB_SHA, will build"
-          elif [ "$(tree "$head")" != "$(tree "$GITHUB_SHA")" ]; then
-            echo "main differs from PR head ${head:0:7}, will build"
-          else
-            echo "candidate=ghcr.io/${GITHUB_REPOSITORY,,}:${head:0:7}" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Log in to GHCR
-        if: steps.pr.outputs.candidate != ''
-        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Check the dev image exists
-        id: exists
-        if: steps.pr.outputs.candidate != ''
-        env:
-          CANDIDATE: ${{ steps.pr.outputs.candidate }}
-        run: |
-          if docker buildx imagetools inspect "$CANDIDATE" > /dev/null 2>&1; then
-            echo "Releasing existing image $CANDIDATE"
-            echo "image=$CANDIDATE" >> "$GITHUB_OUTPUT"
-          else
-            echo "$CANDIDATE not found, will build"
-          fi
-
-  # The checks (test, lint, security, fuzz) all run under the same condition:
-  # skipped when dev didn't change, and on main when the dev image is reused
-  # (those files were already checked on dev).
+  # Every run except an unchanged dev push, or main when HEAD is already released.
   test:
     needs: plan
     if: >-
       !cancelled() && needs.plan.result != 'failure' && needs.plan.outputs.skip != 'true' &&
-      (github.ref != 'refs/heads/main' || (needs.plan.outputs.version != '' && needs.plan.outputs.image == ''))
+      (github.ref != 'refs/heads/main' || needs.plan.outputs.version != '')
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -177,12 +135,16 @@ jobs:
       - name: Tests
         run: cargo test --locked -p narwhal-server -p narwhal-shared -p narwhal-office -p narwhal-frontend
 
+  # lint, security and fuzz: pull requests, main and tags, not dev pushes
+  # (dev gets the quick tests + build; the pull request runs everything).
+
   # Formatting and lints (lint.yaml).
   lint:
     needs: plan
     if: >-
-      !cancelled() && needs.plan.result != 'failure' && needs.plan.outputs.skip != 'true' &&
-      (github.ref != 'refs/heads/main' || (needs.plan.outputs.version != '' && needs.plan.outputs.image == ''))
+      !cancelled() && needs.plan.result != 'failure' &&
+      !(github.event_name == 'push' && github.ref == 'refs/heads/dev') &&
+      (github.ref != 'refs/heads/main' || needs.plan.outputs.version != '')
     uses: $/.github/workflows/lint.yaml
     permissions:
       contents: read
@@ -192,8 +154,9 @@ jobs:
   security:
     needs: plan
     if: >-
-      !cancelled() && needs.plan.result != 'failure' && needs.plan.outputs.skip != 'true' &&
-      (github.ref != 'refs/heads/main' || (needs.plan.outputs.version != '' && needs.plan.outputs.image == ''))
+      !cancelled() && needs.plan.result != 'failure' &&
+      !(github.event_name == 'push' && github.ref == 'refs/heads/dev') &&
+      (github.ref != 'refs/heads/main' || needs.plan.outputs.version != '')
     uses: $/.github/workflows/security.yaml
     permissions:
       contents: read
@@ -203,8 +166,9 @@ jobs:
   fuzz:
     needs: plan
     if: >-
-      !cancelled() && needs.plan.result != 'failure' && needs.plan.outputs.skip != 'true' &&
-      (github.ref != 'refs/heads/main' || (needs.plan.outputs.version != '' && needs.plan.outputs.image == ''))
+      !cancelled() && needs.plan.result != 'failure' &&
+      !(github.event_name == 'push' && github.ref == 'refs/heads/dev') &&
+      (github.ref != 'refs/heads/main' || needs.plan.outputs.version != '')
     uses: $/.github/workflows/fuzz.yaml
     with:
       seconds: "60"
@@ -229,12 +193,13 @@ jobs:
             *" failure "* | *" cancelled "*) exit 1 ;;
           esac
 
-  # Runs when all the checks ran and passed (see test for when they run).
+  # Runs when the tests passed and no other check failed (lint, security and
+  # fuzz are skipped on dev pushes).
   build:
     needs: [plan, test, lint, security, fuzz]
     if: >-
-      !cancelled() && needs.test.result == 'success' && needs.lint.result == 'success' &&
-      needs.security.result == 'success' && needs.fuzz.result == 'success'
+      !cancelled() && needs.test.result == 'success' &&
+      !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -291,39 +256,24 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # One scan, used three times: the run summary, code scanning, and the
-      # check that decides whether the image is pushed.
+      # Table in the run summary, report to code scanning, and a failure on
+      # HIGH or CRITICAL vulnerabilities that have a fix (.github/actions/scan-image).
+      # Every run scans the same name, so GitHub can match a pull request's
+      # findings with main's.
       - name: Scan image
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        uses: $/.github/actions/scan-image
         with:
-          image-ref: narwhal:scan
-          version: v0.76.2
-          format: json
-          output: trivy.json
+          image: narwhal:scan
 
-      - name: Image scan report
-        run: |
-          jq -r -f .github/trivy-summary.jq trivy.json >> "$GITHUB_STEP_SUMMARY"
-          trivy convert --format sarif --output trivy.sarif trivy.json
-
-      - name: Upload image scan to code scanning
-        # Pull requests from forks get a read-only token.
-        if: ${{ !github.event.pull_request.head.repo.fork }}
-        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+      # The scan table, for the pull request comment.
+      - name: Keep the scan table
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          sarif_file: trivy.sarif
-          category: trivy-image
-
-      # Fails on HIGH or CRITICAL vulnerabilities that have a fix (in the base
-      # image's Debian packages). To accept one, add its ID to .trivyignore
-      # with a comment saying why.
-      - name: Check image scan
-        run: |
-          n=$(jq '[.Results[]?.Vulnerabilities[]? | select((.Severity == "HIGH" or .Severity == "CRITICAL") and (.FixedVersion // "") != "")] | length' trivy.json)
-          if [ "$n" -gt 0 ]; then
-            echo "::error::$n HIGH or CRITICAL vulnerabilities with a fix in the image, see the run summary"
-            exit 1
-          fi
+          name: image-scan
+          path: trivy-summary.md
+          if-no-files-found: ignore
+          retention-days: 7
 
       # Same build, all layers from the cache.
       - name: Push
@@ -337,54 +287,11 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
 
-  # main: give the already-built dev image its release tags.
-  promote:
-    needs: plan
-    if: needs.plan.outputs.version != '' && needs.plan.outputs.image != ''
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-
-      - name: Log in to GHCR
-        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Metadata
-        id: meta
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
-        with:
-          images: ghcr.io/${{ github.repository }}
-          flavor: latest=false
-          # Same semver tags as the build job.
-          tags: |
-            type=semver,pattern={{version}},value=${{ needs.plan.outputs.version }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ needs.plan.outputs.version }}
-            type=semver,pattern={{major}},value=${{ needs.plan.outputs.version }},enable=${{ !startsWith(needs.plan.outputs.version, '0.') }}
-
-      # Copies the manifest under the new tags; no layers are rebuilt or re-uploaded.
-      - name: Retag dev image
-        env:
-          SOURCE: ${{ needs.plan.outputs.image }}
-          TAGS: ${{ steps.meta.outputs.tags }}
-        run: |
-          args=()
-          while read -r tag; do
-            if [ -n "$tag" ]; then args+=(-t "$tag"); fi
-          done <<< "$TAGS"
-          docker buildx imagetools create "${args[@]}" "$SOURCE"
-
   release:
-    needs: [plan, build, promote]
-    # Exactly one of build/promote runs on main.
+    needs: [plan, build]
     if: >-
       !cancelled() && github.ref == 'refs/heads/main' && needs.plan.outputs.version != '' &&
-      (needs.build.result == 'success' || needs.promote.result == 'success')
+      needs.build.result == 'success'
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -400,3 +307,72 @@ jobs:
             --target "$GITHUB_SHA" \
             --title "$VERSION" \
             --generate-notes
+
+  # Pull requests: one comment with the results and the image scan, updated
+  # on every run. (Pull requests from forks get a read-only token: no comment.)
+  report:
+    needs: [test, lint, security, fuzz, build]
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && !github.event.pull_request.head.repo.fork }}
+    runs-on: ubuntu-24.04
+    permissions:
+      pull-requests: write # the comment
+    steps:
+      # Missing when the image wasn't built (a check failed first).
+      - name: Get the scan table
+        if: needs.build.result != 'skipped'
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: image-scan
+
+      - name: Comment on the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          TEST: ${{ needs.test.result }}
+          LINT: ${{ needs.lint.result }}
+          SECURITY: ${{ needs.security.result }}
+          FUZZ: ${{ needs.fuzz.result }}
+          BUILD: ${{ needs.build.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          icon() {
+            case "$1" in
+              success) echo "✅ passed" ;;
+              failure) echo "❌ failed" ;;
+              cancelled) echo "⚪ cancelled" ;;
+              skipped) echo "⏭️ skipped" ;;
+              *) echo "$1" ;;
+            esac
+          }
+          marker="<!-- narwhal-ci-report -->"
+          {
+            echo "$marker"
+            echo "## CI for ${SHA:0:7}"
+            echo
+            echo "| Check | Result |"
+            echo "| --- | --- |"
+            echo "| Tests | $(icon "$TEST") |"
+            echo "| Lint: rustfmt, leptosfmt, clippy, typos, actionlint, hadolint, kubeconform | $(icon "$LINT") |"
+            echo "| Security: zizmor | $(icon "$SECURITY") |"
+            echo "| Fuzzing | $(icon "$FUZZ") |"
+            echo "| Image build and scan | $(icon "$BUILD") |"
+            echo
+            if [ -f trivy-summary.md ]; then
+              cat trivy-summary.md
+              echo
+            fi
+            echo "[Run details]($RUN_URL) · [Code scanning alerts for this PR]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/security/code-scanning?query=pr%3A$PR+is%3Aopen)"
+          } > comment.md
+
+          # Update the earlier comment if there is one, so the PR keeps one.
+          id=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR/comments" \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$marker\"))) | .id" | tail -n 1)
+          if [ -n "$id" ]; then
+            jq -n --rawfile body comment.md '{body: $body}' |
+              gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" --input - > /dev/null
+          else
+            jq -n --rawfile body comment.md '{body: $body}' |
+              gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --input - > /dev/null
+          fi
