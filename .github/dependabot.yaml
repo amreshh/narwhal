@@ -35,8 +35,8 @@ updates:
       actions:
         patterns: ["*"]
 
-  # The Dockerfile's base images (Rust builder, distroless runtime), pinned
-  # by digest: new Rust versions and rebuilt images with security fixes.
+  # The Dockerfile's Rust builder image (the runtime is scratch), pinned by
+  # digest: new Rust versions and rebuilt images with security fixes.
   # No cooldown: those fixes shouldn't wait, and the ci workflow
   # scans the image before pushing it.
   - package-ecosystem: docker # zizmor: ignore[dependabot-cooldown]

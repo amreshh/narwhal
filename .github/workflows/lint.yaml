@@ -14,6 +14,14 @@ name: lint
 # Actions are pinned to commits; Dependabot keeps them current.
 on:
   workflow_call:
+    inputs:
+      code-passed:
+        description: >-
+          This code already passed rustfmt and clippy (only the docs changed
+          since), so they're skipped. The rest still runs: the spell check,
+          and hadolint for code scanning.
+        type: boolean
+        default: false
   workflow_dispatch:
 
 permissions:
@@ -21,6 +29,7 @@ permissions:
 
 jobs:
   fmt:
+    if: ${{ !inputs.code-passed }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -46,6 +55,7 @@ jobs:
         run: leptosfmt --check frontend/src
 
   clippy:
+    if: ${{ !inputs.code-passed }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -100,8 +110,15 @@ jobs:
       contents: read
       security-events: write # upload the report
     steps:
+      # Pull requests: the head commit, not GitHub's test merge commit, so the
+      # report is uploaded for the head commit (upload-sarif uses the commit
+      # that's checked out). GitHub can rebuild the merge commit at any time,
+      # and code scanning then blocks the merge until it has results for the
+      # new one. The branch rules keep pull requests up to date with main, so
+      # both have the same files. (Empty on other events: the default.)
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - name: hadolint report
@@ -111,6 +128,14 @@ jobs:
           format: sarif
           output-file: hadolint.sarif
           no-fail: true
+
+      # The findings as a table: in the run summary and the pull request comment.
+      - name: hadolint table
+        uses: $/.github/actions/sarif-summary
+        with:
+          sarif: hadolint.sarif
+          name: hadolint
+          title: Dockerfile lint (hadolint)
 
       - name: Upload report to code scanning
         # Pull requests from forks get a read-only token.

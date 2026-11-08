@@ -5,6 +5,7 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: narwhal
+  namespace: narwhal
   labels:
     app.kubernetes.io/name: narwhal
   annotations:

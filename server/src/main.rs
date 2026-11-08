@@ -57,6 +57,13 @@ struct Config {
 
 type AppState = Arc<Config>;
 
+// The image's static (musl) build. musl's own allocator takes one lock for
+// every allocation, which made parallel requests several times slower than
+// with glibc's (e.g. listing big folders).
+#[cfg(target_env = "musl")]
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 /// Stop at startup because of bad configuration.
 fn fail(msg: impl std::fmt::Display) -> ! {
     eprintln!("{msg}");
@@ -115,8 +122,29 @@ fn raise_open_file_limit() {
     }
 }
 
+fn main() {
+    // `narwhal healthcheck` is the image's HEALTHCHECK. The image has no
+    // shell or curl, so the binary itself asks the running server.
+    if std::env::args_os().nth(1).is_some_and(|a| a == "healthcheck") {
+        let addr = health_addr(bind_addr());
+        if let Err(e) = healthcheck(addr) {
+            fail(format!("health check of {addr} failed: {e}"));
+        }
+        return;
+    }
+    serve();
+}
+
+/// `NARWHAL_BIND`: the address to listen on.
+fn bind_addr() -> SocketAddr {
+    env("NARWHAL_BIND")
+        .unwrap_or_else(|| "[::]:8080".into())
+        .parse()
+        .unwrap_or_else(|_| fail("NARWHAL_BIND must be host:port, e.g. [::]:8080 or 0.0.0.0:8080"))
+}
+
 #[tokio::main]
-async fn main() {
+async fn serve() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,tower_http=info".into()),
@@ -128,10 +156,7 @@ async fn main() {
     let root = Root::open(Path::new(&root_raw), trash::DIR)
         .unwrap_or_else(|e| fail(format!("NARWHAL_ROOT {root_raw:?} is not usable: {e}")));
     let static_dir = PathBuf::from(env("NARWHAL_STATIC_DIR").unwrap_or_else(|| "./static".into()));
-    let bind: SocketAddr = env("NARWHAL_BIND")
-        .unwrap_or_else(|| "[::]:8080".into())
-        .parse()
-        .unwrap_or_else(|_| fail("NARWHAL_BIND must be host:port, e.g. [::]:8080 or 0.0.0.0:8080"));
+    let bind = bind_addr();
 
     let cfg = Arc::new(Config {
         root,
@@ -246,6 +271,34 @@ fn listen(addr: SocketAddr) -> std::io::Result<tokio::net::TcpListener> {
         _ => open(addr, false)?,
     };
     tokio::net::TcpListener::from_std(std_listener)
+}
+
+/// Where `narwhal healthcheck` finds the server: on loopback when it listens
+/// on every address (`[::]` accepts IPv4 too, or fell back to it).
+fn health_addr(bind: SocketAddr) -> SocketAddr {
+    if bind.ip().is_unspecified() {
+        SocketAddr::from(([127, 0, 0, 1], bind.port()))
+    } else {
+        bind
+    }
+}
+
+/// Asks the server at `addr` for `/healthz`: healthy when it answers 200.
+fn healthcheck(addr: SocketAddr) -> std::io::Result<()> {
+    use std::io::{Read, Write};
+    let timeout = std::time::Duration::from_secs(3);
+    let mut conn = std::net::TcpStream::connect_timeout(&addr, timeout)?;
+    conn.set_read_timeout(Some(timeout))?;
+    conn.set_write_timeout(Some(timeout))?;
+    conn.write_all(b"GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")?;
+    // The start of the status line, "HTTP/1.1 200 OK".
+    let mut status = [0; 12];
+    conn.read_exact(&mut status)?;
+    if status.starts_with(b"HTTP/1.") && status.ends_with(b" 200") {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!("it answered {:?}", String::from_utf8_lossy(&status))))
+    }
 }
 
 async fn shutdown_signal() {
@@ -750,6 +803,44 @@ mod tests {
         assert!(check_request(get, None, &headers(&[]), &allowed).is_err());
         // Without a list, any host is accepted.
         assert!(check_request(get, Some("anything"), &headers(&[]), &[]).is_ok());
+    }
+
+    #[test]
+    fn health_check_address() {
+        let addr = |bind: &str| health_addr(bind.parse().unwrap()).to_string();
+        assert_eq!(addr("[::]:8080"), "127.0.0.1:8080");
+        assert_eq!(addr("0.0.0.0:9000"), "127.0.0.1:9000");
+        assert_eq!(addr("[::1]:8080"), "[::1]:8080");
+        assert_eq!(addr("192.168.1.5:8080"), "192.168.1.5:8080");
+    }
+
+    /// Answers one connection with `reply`. The thread returns the request.
+    fn answer_once(reply: &'static str) -> (SocketAddr, std::thread::JoinHandle<String>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let thread = std::thread::spawn(move || {
+            let (mut conn, _) = listener.accept().unwrap();
+            let mut request = [0; 1024];
+            let n = conn.read(&mut request).unwrap();
+            conn.write_all(reply.as_bytes()).unwrap();
+            String::from_utf8_lossy(&request[..n]).into_owned()
+        });
+        (addr, thread)
+    }
+
+    #[test]
+    fn health_check_asks_healthz() {
+        let (addr, server) = answer_once("HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok");
+        assert!(healthcheck(addr).is_ok());
+        assert!(server.join().unwrap().starts_with("GET /healthz HTTP/1.1\r\n"));
+
+        let (addr, _) = answer_once("HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\n\r\n");
+        assert!(healthcheck(addr).is_err());
+
+        // Nothing listening (the port is free again once the listener is dropped).
+        let addr = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
+        assert!(healthcheck(addr).is_err());
     }
 
     #[test]

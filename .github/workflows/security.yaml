@@ -23,17 +23,33 @@ jobs:
       contents: read
       security-events: write # upload the report
     steps:
+      # Pull requests: the head commit, not GitHub's test merge commit, so the
+      # report is uploaded for the head commit (upload-sarif uses the commit
+      # that's checked out). GitHub can rebuild the merge commit at any time,
+      # and code scanning then blocks the merge until it has results for the
+      # new one. (Empty on other events: the default.)
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       # SARIF to Security → Code scanning. zizmor never fails in this mode,
       # so the next step does the checking.
       - name: zizmor report
+        id: report
         if: ${{ !github.event.pull_request.head.repo.fork }} # forks get a read-only token
         uses: zizmorcore/zizmor-action@45d7276c9ca790aabd705e31ca99c6185c3e76dd # v0.8.1
         with:
           version: 1.32.0
+
+      # The findings as a table: in the run summary and the pull request comment.
+      - name: zizmor table
+        if: ${{ !github.event.pull_request.head.repo.fork }}
+        uses: $/.github/actions/sarif-summary
+        with:
+          sarif: ${{ steps.report.outputs.output-file }}
+          name: zizmor
+          title: Workflow security (zizmor)
 
       # Fails on findings and marks them on the workflow lines.
       - name: zizmor

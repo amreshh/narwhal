@@ -1,0 +1,12 @@
+# Vulnerabilities a maintainer has bypassed: Trivy no longer fails the build
+# on them or reports them to code scanning, and the scan summary lists them as
+# bypassed, with the statement as the reason (.github/actions/scan-image).
+#
+# Give every bypass a statement and an expiry date. After expired_at the
+# finding counts again, so the decision gets looked at again:
+#
+#   vulnerabilities:
+#     - id: CVE-2026-12345
+#       statement: Only reachable through X, which the server never uses
+#       expired_at: 2027-01-31
+vulnerabilities: []

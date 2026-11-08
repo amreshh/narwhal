@@ -7,13 +7,18 @@ name: ci
 #                  main after a merge)
 #   pull request   tests, lint, security and fuzzing side by side, then build
 #                  and scan the image (nothing pushed). A comment on the PR
-#                  sums up the results.
+#                  sums up the results, with the Trivy, hadolint and zizmor
+#                  findings.
 #   push to main   the same checks, then the release build: the next version
 #                  (see below) as :1.2.3, :1.2, :1, a git tag v1.2.3 and a
 #                  GitHub Release with generated notes
 #   tag v1.2.3     the same checks, then :1.2.3, :1.2, :1 (manual; the tag
 #                  must be on main). No major-only tag while on 0.x: 0.x
 #                  minors can break. A tag like v1.2.3-rc1 gets only that tag.
+#
+#   Changes to nothing but the docs (Markdown files and docs/) skip the tests,
+#   build and release once the rest has passed them. A pull request still runs
+#   the spell check and what code scanning needs (see plan).
 #
 #   plan ─┬─ test ─────┐
 #         ├─ lint ─────┤               ┌─ release (main)
@@ -22,10 +27,11 @@ name: ci
 #
 # lint, security and fuzz are in their own files and called from here;
 # security and fuzz also run weekly on their own. The image is scanned with
-# Trivy (.github/actions/scan-image): a table in the run summary, and builds
-# fail on HIGH or CRITICAL vulnerabilities that have a fix. Reports from
-# Trivy, zizmor and hadolint go to Security → Code scanning; image-scan.yaml
-# rescans the latest release daily. `checks` sums up the checks for branch rules.
+# Trivy (.github/actions/scan-image): every vulnerability in the run summary,
+# and builds fail on HIGH or CRITICAL ones that have a fix, unless bypassed
+# in .trivyignore.yaml. Reports from Trivy, zizmor and hadolint go to
+# Security → Code scanning; image-scan.yaml rescans the latest release daily.
+# `checks` sums up the checks for branch rules.
 #
 # Version on main: bumps the patch of the latest vX.Y.Z tag. Put "#minor" or
 # "#major" in a commit message (e.g. the merge commit) to bump that instead.
@@ -48,23 +54,60 @@ concurrency:
 permissions: {}
 
 jobs:
-  # Decides what this run has to do. Only runs for main and dev pushes.
+  # Decides what this run has to do. Docs changes (DOCS) don't need the tests,
+  # an image or a release:
+  # - Pull requests and dev pushes skip the checks when the code (every file
+  #   but the docs) already passed them: the build job remembers each code
+  #   version that passed, in the Actions cache. This also skips dev after
+  #   it's reset to main. Pull requests skip only the slow ones (tests,
+  #   rustfmt, clippy, fuzzing): the branch rules want code scanning results
+  #   (Hadolint, zizmor, Trivy) for every new commit, so those run, and the
+  #   spell check covers the docs.
+  # - main releases only when more than the docs changed since the last release.
+  # Manual runs and tags always run everything.
   plan:
-    if: github.ref == 'refs/heads/main' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')
     runs-on: ubuntu-24.04
     permissions:
       contents: read
     outputs:
       version: ${{ steps.next.outputs.version }}
-      skip: ${{ steps.dev.outputs.skip }}
+      key: ${{ steps.code.outputs.key }}
+      tested: ${{ steps.tested.outputs.cache-hit }}
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # git pathspecs, separated by spaces
+      DOCS: ":(exclude)*.md :(exclude)docs/"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: github.ref == 'refs/heads/main'
         with:
-          fetch-depth: 0
+          fetch-depth: 0 # the release tags, on main
           persist-credentials: false
+
+      # dev pushes only test and build; everything else runs every check.
+      - name: Fingerprint the code
+        id: code
+        run: |
+          read -ra docs <<< "$DOCS"
+          code=$(git ls-files -s -- . "${docs[@]}" | sha256sum | cut -d' ' -f1)
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/dev ]; then
+            checks=dev
+          else
+            checks=all
+          fi
+          echo "key=ci-passed-$checks-$code" >> "$GITHUB_OUTPUT"
+
+      # Only looks the key up: nothing from the cache goes into a build.
+      - name: Did this code already pass?
+        id: tested
+        if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ci-passed
+          key: ${{ steps.code.outputs.key }}
+          lookup-only: true
+
+      - name: Say so
+        if: steps.tested.outputs.cache-hit == 'true'
+        run: echo "This code already passed the checks in an earlier run, and only the docs changed since. Skipping them."
 
       - name: Work out next version
         id: next
@@ -77,6 +120,11 @@ jobs:
           fi
 
           last=$(git tag -l 'v*' --sort=-v:refname | grep -E "$stable" | head -1 || true)
+          read -ra docs <<< "$DOCS"
+          if [ -n "$last" ] && git diff --quiet "$last" HEAD -- . "${docs[@]}"; then
+            echo "Only the docs changed since $last, nothing to release"
+            exit 0
+          fi
           if [ -z "$last" ]; then
             version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
           else
@@ -94,25 +142,11 @@ jobs:
           echo "Releasing v$version (previous: ${last:-none})"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      # After a merge, dev is reset to main: same files as before, nothing new to test or build.
-      - name: Check dev content changed
-        id: dev
-        if: github.ref == 'refs/heads/dev'
-        env:
-          BEFORE: ${{ github.event.before }}
-        run: |
-          tree() { gh api "repos/$GITHUB_REPOSITORY/commits/$1" --jq .commit.tree.sha 2>/dev/null || true; }
-          now=$(tree "$GITHUB_SHA")
-          if [ -n "$now" ] && [ "$(tree "$BEFORE")" = "$now" ]; then
-            echo "Files are identical to the previous dev commit ${BEFORE:0:7}, skipping"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          fi
-
-  # Every run except an unchanged dev push, or main when HEAD is already released.
+  # Every run except code that already passed, or main with nothing to release.
   test:
     needs: plan
     if: >-
-      !cancelled() && needs.plan.result != 'failure' && needs.plan.outputs.skip != 'true' &&
+      !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.tested != 'true' &&
       (github.ref != 'refs/heads/main' || needs.plan.outputs.version != '')
     runs-on: ubuntu-24.04
     permissions:
@@ -138,14 +172,16 @@ jobs:
   # lint, security and fuzz: pull requests, main and tags, not dev pushes
   # (dev gets the quick tests + build; the pull request runs everything).
 
-  # Formatting and lints (lint.yaml).
+  # Formatting and lints (lint.yaml). Without rustfmt and clippy when the code already passed.
   lint:
     needs: plan
     if: >-
-      !cancelled() && needs.plan.result != 'failure' &&
+      !cancelled() && needs.plan.result == 'success' &&
       !(github.event_name == 'push' && github.ref == 'refs/heads/dev') &&
       (github.ref != 'refs/heads/main' || needs.plan.outputs.version != '')
     uses: $/.github/workflows/lint.yaml
+    with:
+      code-passed: ${{ needs.plan.outputs.tested == 'true' }}
     permissions:
       contents: read
       security-events: write # hadolint's report
@@ -154,7 +190,7 @@ jobs:
   security:
     needs: plan
     if: >-
-      !cancelled() && needs.plan.result != 'failure' &&
+      !cancelled() && needs.plan.result == 'success' &&
       !(github.event_name == 'push' && github.ref == 'refs/heads/dev') &&
       (github.ref != 'refs/heads/main' || needs.plan.outputs.version != '')
     uses: $/.github/workflows/security.yaml
@@ -166,7 +202,7 @@ jobs:
   fuzz:
     needs: plan
     if: >-
-      !cancelled() && needs.plan.result != 'failure' &&
+      !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.tested != 'true' &&
       !(github.event_name == 'push' && github.ref == 'refs/heads/dev') &&
       (github.ref != 'refs/heads/main' || needs.plan.outputs.version != '')
     uses: $/.github/workflows/fuzz.yaml
@@ -194,11 +230,15 @@ jobs:
           esac
 
   # Runs when the tests passed and no other check failed (lint, security and
-  # fuzz are skipped on dev pushes).
+  # fuzz are skipped on dev pushes). Also on a pull request whose code already
+  # passed: code scanning needs Trivy's results for every new commit, and the
+  # image comes straight from the layer cache (the docs aren't in it).
   build:
     needs: [plan, test, lint, security, fuzz]
     if: >-
-      !cancelled() && needs.test.result == 'success' &&
+      !cancelled() &&
+      (needs.test.result == 'success' ||
+        (github.event_name == 'pull_request' && needs.plan.outputs.tested == 'true')) &&
       !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
     runs-on: ubuntu-24.04
     permissions:
@@ -206,8 +246,15 @@ jobs:
       packages: write
       security-events: write # the image scan's report
     steps:
+      # Pull requests: the head commit, not GitHub's test merge commit, so Trivy's
+      # report is uploaded for the head commit (upload-sarif uses the commit
+      # that's checked out). GitHub can rebuild the merge commit at any time,
+      # and code scanning then blocks the merge until it has results for the
+      # new one. The branch rules keep pull requests up to date with main, so
+      # both have the same files. (Empty on other events: the default.)
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -270,7 +317,7 @@ jobs:
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: image-scan
+          name: scan-summary-trivy
           path: trivy-summary.md
           if-no-files-found: ignore
           retention-days: 7
@@ -286,6 +333,20 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
+
+      # Everything this run checks passed, the image scan included: remember
+      # this code, so a later run with only docs changes can skip it (see plan).
+      - name: Mark this code as passed
+        if: needs.plan.outputs.tested != 'true'
+        env:
+          KEY: ${{ needs.plan.outputs.key }}
+        run: echo "$KEY" > .ci-passed
+
+      - if: needs.plan.outputs.tested != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ci-passed
+          key: ${{ needs.plan.outputs.key }}
 
   release:
     needs: [plan, build]
@@ -308,22 +369,27 @@ jobs:
             --title "$VERSION" \
             --generate-notes
 
-  # Pull requests: one comment with the results and the image scan, updated
-  # on every run. (Pull requests from forks get a read-only token: no comment.)
+  # Pull requests: one comment with the results and the scan tables (Trivy,
+  # hadolint, zizmor), updated on every run. (Pull requests from forks get a read-only token: no comment.)
+  # When the code already passed (only the docs changed), the comment keeps
+  # that run's results.
   report:
-    needs: [test, lint, security, fuzz, build]
-    if: ${{ !cancelled() && github.event_name == 'pull_request' && !github.event.pull_request.head.repo.fork }}
+    needs: [plan, test, lint, security, fuzz, build]
+    if: >-
+      !cancelled() && github.event_name == 'pull_request' && !github.event.pull_request.head.repo.fork &&
+      needs.plan.outputs.tested != 'true'
     runs-on: ubuntu-24.04
     permissions:
       pull-requests: write # the comment
     steps:
-      # Missing when the image wasn't built (a check failed first).
-      - name: Get the scan table
-        if: needs.build.result != 'skipped'
+      # The scan tables: Trivy (build), hadolint (lint) and zizmor (security).
+      # One is missing when its job didn't get that far.
+      - name: Get the scan tables
         continue-on-error: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: image-scan
+          pattern: scan-summary-*
+          merge-multiple: true
 
       - name: Comment on the pull request
         env:
@@ -359,10 +425,12 @@ jobs:
             echo "| Fuzzing | $(icon "$FUZZ") |"
             echo "| Image build and scan | $(icon "$BUILD") |"
             echo
-            if [ -f trivy-summary.md ]; then
-              cat trivy-summary.md
-              echo
-            fi
+            for scan in trivy hadolint zizmor; do
+              if [ -f "$scan-summary.md" ]; then
+                cat "$scan-summary.md"
+                echo
+              fi
+            done
             echo "[Run details]($RUN_URL) · [Code scanning alerts for this PR]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/security/code-scanning?query=pr%3A$PR+is%3Aopen)"
           } > comment.md
 

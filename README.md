@@ -68,7 +68,7 @@ frontend/   Leptos CSR app built with Trunk         → frontend/dist
               (src/columns.rs is the column view)
 office/     reads office documents for the previews (used by the frontend)
 deploy/     Kustomize manifests (namespace, PVC, Deployment, Service, Ingress)
-Dockerfile  multi-stage build → distroless runtime image
+Dockerfile  multi-stage build → scratch runtime image
 ```
 
 ## Running locally
@@ -110,16 +110,24 @@ Every push and pull request runs one pipeline, `ci`:
 
 - **push to `dev`**: the tests, then the image build (`:latest`)
 - **pull request**: the tests, `lint`, `security` and a short `fuzz` run side by side,
-  then the image build and scan (nothing pushed); a comment on the PR sums up the results
+  then the image build and scan (nothing pushed); a comment on the PR sums up the results,
+  with tables of the Trivy, hadolint and zizmor findings
 - **push to `main`**: the same checks, then the release build and release
+
+Changes to only the docs (Markdown files and `docs/`) skip the tests, build and
+release once the rest of the code has passed them. A pull request still runs the
+spell check, and the scans that the branch rules want code scanning results from
+for every commit (hadolint, zizmor, and Trivy on the image, which then comes
+straight from the build cache).
 
 | Workflow | What it does |
 | --- | --- |
-| `ci` | The pipeline. Every image is scanned with Trivy: builds fail on fixable HIGH/CRITICAL vulnerabilities, and the run summary has a table. Its `checks` job is the one to require in branch rules |
+| `ci` | The pipeline. Every image is scanned with Trivy: the run summary lists every vulnerability and whether it has a fix, and builds fail on fixable HIGH/CRITICAL ones unless a maintainer bypasses them in `.trivyignore.yaml` (with a reason and an expiry date). Its `checks` job is the one to require in branch rules |
 | `lint` | rustfmt + leptosfmt, clippy, typos, actionlint, hadolint, kubeconform |
 | `security` | zizmor (workflow security); also weekly. CodeQL runs through GitHub's default setup |
 | `fuzz` | Fuzzes the document readers: a minute per target in `ci`, 10 minutes weekly |
 | `image scan` | Scans the latest released image daily, so newly published vulnerabilities show up; fails (GitHub emails you) on fixable HIGH/CRITICAL ones |
+| `labeler` | Labels pull requests by the files they change (`.github/labeler.yaml`) |
 
 Reports from Trivy, zizmor and hadolint go to Security → Code scanning. Actions
 are pinned to commits and the Dockerfile's base images to digests; Dependabot
@@ -145,13 +153,20 @@ of `-p` must be `8080`. On SELinux hosts (Fedora, RHEL) add
 `--security-opt label=disable`, or `:z` on the volume, to let the container read
 the folder.
 
+The runtime image is built `FROM scratch`: just the server (a static musl
+binary) and the frontend, with no operating system files at all (no shell, C
+library, CA certificates or time zone data). Its health check (`narwhal
+healthcheck`, which asks `/healthz`) shows in `docker ps`.
+
 The build stage needs network access to crates.io and GitHub (Trunk downloads
 `wasm-bindgen` and `wasm-opt` on first use). Multi-arch works with
 `docker buildx build --platform linux/amd64,linux/arm64`.
 
 ## Deploying to Kubernetes
 
-1. Push the image and set its name in `deploy/kustomization.yaml`.
+1. The manifests run a release from GHCR: to upgrade, bump its version in
+   `deploy/deployment.yaml`. To run your own build, push it and set its name in
+   `deploy/kustomization.yaml`.
 2. Set your hostname in `deploy/ingress.yaml` and **enable authentication**
    (see below).
 3. `kubectl apply -k deploy`

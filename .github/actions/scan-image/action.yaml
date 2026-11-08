@@ -1,9 +1,10 @@
 name: Scan image
 description: >-
-  Scans a container image with Trivy: a table in the job summary, the full
-  report (SARIF) to Security → Code scanning, and a failure on HIGH or
-  CRITICAL vulnerabilities that have a fix. To accept one, add its ID to
-  .trivyignore (in the checked-out repo) with a comment saying why.
+  Scans a container image with Trivy: every vulnerability in the job summary,
+  with or without a fix, the open ones (SARIF) to Security → Code scanning,
+  and a failure on HIGH or CRITICAL vulnerabilities that have a fix. A
+  maintainer can bypass one in .trivyignore.yaml (in the checked-out repo),
+  with a statement saying why; the summary still lists it.
 inputs:
   image:
     description: The image, in the runner's Docker or in a registry it's logged in to.
@@ -19,6 +20,11 @@ runs:
         version: v0.76.2
         format: json
         output: trivy.json
+        trivyignores: .trivyignore.yaml
+      env:
+        # Bypassed findings stay in the report (as modified findings, with
+        # their statement), so the summary can list them.
+        TRIVY_SHOW_SUPPRESSED: "true"
 
     # The table also stays in trivy-summary.md (for the pull request comment).
     # It links to this run's findings in code scanning: the pull request's,
@@ -42,6 +48,8 @@ runs:
         cat trivy-summary.md >> "$GITHUB_STEP_SUMMARY"
         trivy convert --format sarif --output trivy.sarif trivy.json
 
+    # For the commit that's checked out: on pull requests, check out the head
+    # commit (see the build job in ci.yaml).
     - name: Upload to code scanning
       # Pull requests from forks get a read-only token.
       if: ${{ !github.event.pull_request.head.repo.fork }}
@@ -55,6 +63,6 @@ runs:
       run: |
         n=$(jq '[.Results[]?.Vulnerabilities[]? | select((.Severity == "HIGH" or .Severity == "CRITICAL") and (.FixedVersion // "") != "")] | length' trivy.json)
         if [ "$n" -gt 0 ]; then
-          echo "::error::$n HIGH or CRITICAL vulnerabilities with a fix in the image, see the job summary"
+          echo "::error::$n HIGH or CRITICAL vulnerabilities with a fix in the image, see the job summary. Update them, or bypass them in .trivyignore.yaml with a reason"
           exit 1
         fi
