@@ -9,7 +9,8 @@ def cell: tostring | gsub("[\r\n]+"; " ") | gsub("\\|"; "\\|") | gsub("<"; "&lt;
 | [$v[] | select((.Severity == "HIGH" or .Severity == "CRITICAL") and (.FixedVersion // "") != "")] as $bad
 | "## Image scan (Trivy)",
   "",
-  "\(.Metadata.OS.Family // "?") \(.Metadata.OS.Name // "") base image. Builds fail on HIGH or CRITICAL vulnerabilities that have a fix.",
+  (if .Metadata.OS then "\(.Metadata.OS.Family) \(.Metadata.OS.Name // "") base image." else "No operating system in the image (built from scratch)." end)
+    + " Builds fail on HIGH or CRITICAL vulnerabilities that have a fix.",
   "",
   "| Severity | With a fix | All |",
   "| --- | --: | --: |",

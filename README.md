@@ -68,7 +68,7 @@ frontend/   Leptos CSR app built with Trunk         → frontend/dist
               (src/columns.rs is the column view)
 office/     reads office documents for the previews (used by the frontend)
 deploy/     Kustomize manifests (namespace, PVC, Deployment, Service, Ingress)
-Dockerfile  multi-stage build → distroless runtime image
+Dockerfile  multi-stage build → scratch runtime image
 ```
 
 ## Running locally
@@ -144,6 +144,11 @@ The server listens on port **8080** inside the container, so the right-hand side
 of `-p` must be `8080`. On SELinux hosts (Fedora, RHEL) add
 `--security-opt label=disable`, or `:z` on the volume, to let the container read
 the folder.
+
+The runtime image is built `FROM scratch`: just the server (a static musl
+binary) and the frontend, with no operating system files at all (no shell, C
+library, CA certificates or time zone data). Its health check (`narwhal
+healthcheck`, which asks `/healthz`) shows in `docker ps`.
 
 The build stage needs network access to crates.io and GitHub (Trunk downloads
 `wasm-bindgen` and `wasm-opt` on first use). Multi-arch works with
