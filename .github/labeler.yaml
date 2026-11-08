@@ -1,0 +1,47 @@
+# Labels for pull requests, by the files they change (workflows/labeler.yaml).
+# A label that doesn't exist yet is created the first time it's used; set its
+# colour and description under Issues → Labels.
+
+server:
+  - changed-files:
+      - any-glob-to-any-file: server/**
+
+frontend:
+  - changed-files:
+      - any-glob-to-any-file: frontend/**
+
+office:
+  - changed-files:
+      - any-glob-to-any-file: office/**
+
+shared:
+  - changed-files:
+      - any-glob-to-any-file: shared/**
+
+fuzz:
+  - changed-files:
+      - any-glob-to-any-file: fuzz/**
+
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file: Cargo.lock
+
+image:
+  - changed-files:
+      - any-glob-to-any-file: [Dockerfile, .dockerignore]
+
+deploy:
+  - changed-files:
+      - any-glob-to-any-file: deploy/**
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - .github/workflows/**
+          - .github/actions/**
+          - .github/*.yaml
+
+# The same files ci.yaml treats as docs (no tests, build or release).
+docs:
+  - changed-files:
+      - any-glob-to-any-file: ["**/*.md", docs/**]

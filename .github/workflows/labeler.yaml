@@ -1,0 +1,27 @@
+name: labeler
+
+# Labels pull requests by the files they change: server, frontend, docs, ci…
+# (.github/labeler.yaml). Labels are only added, never taken off.
+#
+# pull_request rather than pull_request_target: a pull request from a fork gets
+# a read-only token, so it stays unlabelled, but no job ever runs with write
+# access on a fork's behalf. Dependabot's pull requests get the permissions
+# below and are labelled too.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions: {}
+
+jobs:
+  label:
+    if: ${{ !github.event.pull_request.head.repo.fork }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read # the configuration, read through the API
+      pull-requests: write # add the labels
+      issues: write # create a label the first time it's used
+    steps:
+      - uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13 # v7.0.0
+        with:
+          configuration-path: .github/labeler.yaml
