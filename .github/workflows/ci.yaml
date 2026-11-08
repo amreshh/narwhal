@@ -15,6 +15,10 @@ name: ci
 #                  must be on main). No major-only tag while on 0.x: 0.x
 #                  minors can break. A tag like v1.2.3-rc1 gets only that tag.
 #
+#   Changes to nothing but the docs (Markdown files and docs/) skip the tests,
+#   build and release once the rest has passed them; a pull request still
+#   spell-checks the docs. See plan.
+#
 #   plan ─┬─ test ─────┐
 #         ├─ lint ─────┤               ┌─ release (main)
 #         ├─ security ─┼─── build ─────┤
@@ -48,23 +52,57 @@ concurrency:
 permissions: {}
 
 jobs:
-  # Decides what this run has to do. Only runs for main and dev pushes.
+  # Decides what this run has to do. Docs changes (DOCS) don't need the tests,
+  # an image or a release:
+  # - Pull requests and dev pushes skip the checks when the code (every file
+  #   but the docs) already passed them: the build job remembers each code
+  #   version that passed, in the Actions cache. Pull requests still run the
+  #   spell check. This also skips dev after it's reset to main.
+  # - main releases only when more than the docs changed since the last release.
+  # Manual runs and tags always run everything.
   plan:
-    if: github.ref == 'refs/heads/main' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')
     runs-on: ubuntu-24.04
     permissions:
       contents: read
     outputs:
       version: ${{ steps.next.outputs.version }}
-      skip: ${{ steps.dev.outputs.skip }}
+      key: ${{ steps.code.outputs.key }}
+      tested: ${{ steps.tested.outputs.cache-hit }}
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # git pathspecs, separated by spaces
+      DOCS: ":(exclude)*.md :(exclude)docs/"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: github.ref == 'refs/heads/main'
         with:
-          fetch-depth: 0
+          fetch-depth: 0 # the release tags, on main
           persist-credentials: false
+
+      # dev pushes only test and build; everything else runs every check.
+      - name: Fingerprint the code
+        id: code
+        run: |
+          read -ra docs <<< "$DOCS"
+          code=$(git ls-files -s -- . "${docs[@]}" | sha256sum | cut -d' ' -f1)
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/dev ]; then
+            checks=dev
+          else
+            checks=all
+          fi
+          echo "key=ci-passed-$checks-$code" >> "$GITHUB_OUTPUT"
+
+      # Only looks the key up: nothing from the cache goes into a build.
+      - name: Did this code already pass?
+        id: tested
+        if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # zizmor: ignore[cache-poisoning] v6.1.0
+        with:
+          path: .ci-passed
+          key: ${{ steps.code.outputs.key }}
+          lookup-only: true
+
+      - name: Say so
+        if: steps.tested.outputs.cache-hit == 'true'
+        run: echo "This code already passed the checks in an earlier run, and only the docs changed since. Skipping them."
 
       - name: Work out next version
         id: next
@@ -77,6 +115,11 @@ jobs:
           fi
 
           last=$(git tag -l 'v*' --sort=-v:refname | grep -E "$stable" | head -1 || true)
+          read -ra docs <<< "$DOCS"
+          if [ -n "$last" ] && git diff --quiet "$last" HEAD -- . "${docs[@]}"; then
+            echo "Only the docs changed since $last, nothing to release"
+            exit 0
+          fi
           if [ -z "$last" ]; then
             version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
           else
@@ -94,25 +137,11 @@ jobs:
           echo "Releasing v$version (previous: ${last:-none})"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      # After a merge, dev is reset to main: same files as before, nothing new to test or build.
-      - name: Check dev content changed
-        id: dev
-        if: github.ref == 'refs/heads/dev'
-        env:
-          BEFORE: ${{ github.event.before }}
-        run: |
-          tree() { gh api "repos/$GITHUB_REPOSITORY/commits/$1" --jq .commit.tree.sha 2>/dev/null || true; }
-          now=$(tree "$GITHUB_SHA")
-          if [ -n "$now" ] && [ "$(tree "$BEFORE")" = "$now" ]; then
-            echo "Files are identical to the previous dev commit ${BEFORE:0:7}, skipping"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          fi
-
-  # Every run except an unchanged dev push, or main when HEAD is already released.
+  # Every run except code that already passed, or main with nothing to release.
   test:
     needs: plan
     if: >-
-      !cancelled() && needs.plan.result != 'failure' && needs.plan.outputs.skip != 'true' &&
+      !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.tested != 'true' &&
       (github.ref != 'refs/heads/main' || needs.plan.outputs.version != '')
     runs-on: ubuntu-24.04
     permissions:
@@ -138,14 +167,16 @@ jobs:
   # lint, security and fuzz: pull requests, main and tags, not dev pushes
   # (dev gets the quick tests + build; the pull request runs everything).
 
-  # Formatting and lints (lint.yaml).
+  # Formatting and lints (lint.yaml). Only the spell check when only the docs changed.
   lint:
     needs: plan
     if: >-
-      !cancelled() && needs.plan.result != 'failure' &&
+      !cancelled() && needs.plan.result == 'success' &&
       !(github.event_name == 'push' && github.ref == 'refs/heads/dev') &&
       (github.ref != 'refs/heads/main' || needs.plan.outputs.version != '')
     uses: $/.github/workflows/lint.yaml
+    with:
+      docs-only: ${{ needs.plan.outputs.tested == 'true' }}
     permissions:
       contents: read
       security-events: write # hadolint's report
@@ -154,7 +185,7 @@ jobs:
   security:
     needs: plan
     if: >-
-      !cancelled() && needs.plan.result != 'failure' &&
+      !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.tested != 'true' &&
       !(github.event_name == 'push' && github.ref == 'refs/heads/dev') &&
       (github.ref != 'refs/heads/main' || needs.plan.outputs.version != '')
     uses: $/.github/workflows/security.yaml
@@ -166,7 +197,7 @@ jobs:
   fuzz:
     needs: plan
     if: >-
-      !cancelled() && needs.plan.result != 'failure' &&
+      !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.tested != 'true' &&
       !(github.event_name == 'push' && github.ref == 'refs/heads/dev') &&
       (github.ref != 'refs/heads/main' || needs.plan.outputs.version != '')
     uses: $/.github/workflows/fuzz.yaml
@@ -287,6 +318,18 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
 
+      # Everything this run checks passed, the image scan included: remember
+      # this code, so a later run with only docs changes can skip it (see plan).
+      - name: Mark this code as passed
+        env:
+          KEY: ${{ needs.plan.outputs.key }}
+        run: echo "$KEY" > .ci-passed
+
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ci-passed
+          key: ${{ needs.plan.outputs.key }}
+
   release:
     needs: [plan, build]
     if: >-
@@ -310,9 +353,13 @@ jobs:
 
   # Pull requests: one comment with the results and the image scan, updated
   # on every run. (Pull requests from forks get a read-only token: no comment.)
+  # When the code already passed (only the docs changed), the comment keeps
+  # that run's results.
   report:
-    needs: [test, lint, security, fuzz, build]
-    if: ${{ !cancelled() && github.event_name == 'pull_request' && !github.event.pull_request.head.repo.fork }}
+    needs: [plan, test, lint, security, fuzz, build]
+    if: >-
+      !cancelled() && github.event_name == 'pull_request' && !github.event.pull_request.head.repo.fork &&
+      needs.plan.outputs.tested != 'true'
     runs-on: ubuntu-24.04
     permissions:
       pull-requests: write # the comment

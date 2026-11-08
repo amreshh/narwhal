@@ -113,6 +113,10 @@ Every push and pull request runs one pipeline, `ci`:
   then the image build and scan (nothing pushed); a comment on the PR sums up the results
 - **push to `main`**: the same checks, then the release build and release
 
+Changes to only the docs (Markdown files and `docs/`) skip the tests, build and
+release once the rest of the code has passed them; a pull request still
+spell-checks the docs.
+
 | Workflow | What it does |
 | --- | --- |
 | `ci` | The pipeline. Every image is scanned with Trivy: builds fail on fixable HIGH/CRITICAL vulnerabilities, and the run summary has a table. Its `checks` job is the one to require in branch rules |

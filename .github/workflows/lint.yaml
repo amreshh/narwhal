@@ -14,6 +14,11 @@ name: lint
 # Actions are pinned to commits; Dependabot keeps them current.
 on:
   workflow_call:
+    inputs:
+      docs-only:
+        description: Only the docs changed, so only the spell check runs
+        type: boolean
+        default: false
   workflow_dispatch:
 
 permissions:
@@ -21,6 +26,7 @@ permissions:
 
 jobs:
   fmt:
+    if: ${{ !inputs.docs-only }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -46,6 +52,7 @@ jobs:
         run: leptosfmt --check frontend/src
 
   clippy:
+    if: ${{ !inputs.docs-only }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -76,6 +83,7 @@ jobs:
       - uses: crate-ci/typos@4c8b7f51ca60df14e3c5ca82770dfbbe6c3dae85 # v1.52.0
 
   actionlint:
+    if: ${{ !inputs.docs-only }}
     runs-on: ubuntu-24.04
     env:
       VERSION: 1.7.12
@@ -95,6 +103,7 @@ jobs:
           ./actionlint -color
 
   hadolint:
+    if: ${{ !inputs.docs-only }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -128,6 +137,7 @@ jobs:
           failure-threshold: warning
 
   kubeconform:
+    if: ${{ !inputs.docs-only }}
     runs-on: ubuntu-24.04
     env:
       VERSION: 0.8.0
