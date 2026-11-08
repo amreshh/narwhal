@@ -2,16 +2,18 @@ name: ci
 
 # What runs when:
 #
-#   push to dev    tests, then build ghcr.io/<repo>:<short-sha> and :latest
-#                  (skipped when the files didn't change, e.g. dev reset to
-#                  main after a merge)
+#   push to dev    tests, then build ghcr.io/<repo>:<short-sha>, :latest and
+#                  :code-<fingerprint> (skipped when the code didn't change,
+#                  e.g. dev reset to main after a merge)
 #   pull request   tests, lint, security and fuzzing side by side, then build
 #                  and scan the image (nothing pushed). A comment on the PR
 #                  sums up the results, with the Trivy, hadolint and zizmor
 #                  findings.
-#   push to main   the same checks, then the release build: the next version
-#                  (see below) as :1.2.3, :1.2, :1, a git tag v1.2.3 and a
-#                  GitHub Release with generated notes
+#   push to main   the same checks, then the release: the image dev built
+#                  from the same code, rescanned and tagged with the next
+#                  version (see below) as :1.2.3, :1.2, :1 (built fresh only
+#                  when dev has none), a git tag v1.2.3 and a GitHub Release
+#                  with generated notes
 #   tag v1.2.3     the same checks, then :1.2.3, :1.2, :1 (manual; the tag
 #                  must be on main). No major-only tag while on 0.x: 0.x
 #                  minors can break. A tag like v1.2.3-rc1 gets only that tag.
@@ -71,7 +73,9 @@ jobs:
       contents: read
     outputs:
       version: ${{ steps.next.outputs.version }}
+      previous: ${{ steps.next.outputs.previous }}
       key: ${{ steps.code.outputs.key }}
+      code: ${{ steps.code.outputs.code }}
       tested: ${{ steps.tested.outputs.cache-hit }}
     env:
       # git pathspecs, separated by spaces
@@ -94,6 +98,8 @@ jobs:
             checks=all
           fi
           echo "key=ci-passed-$checks-$code" >> "$GITHUB_OUTPUT"
+          # For the image tag :code-<fingerprint> (see build).
+          echo "code=${code:0:20}" >> "$GITHUB_OUTPUT"
 
       # Only looks the key up: nothing from the cache goes into a build.
       - name: Did this code already pass?
@@ -141,6 +147,7 @@ jobs:
 
           echo "Releasing v$version (previous: ${last:-none})"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "previous=$last" >> "$GITHUB_OUTPUT"
 
   # Every run except code that already passed, or main with nothing to release.
   test:
@@ -289,11 +296,42 @@ jobs:
             type=semver,pattern={{major}}.{{minor}},value=${{ needs.plan.outputs.version }}
             type=semver,pattern={{major}},value=${{ needs.plan.outputs.version }},enable=${{ !startsWith(needs.plan.outputs.version, '0.') && !startsWith(github.ref, 'refs/tags/v0.') }}
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/dev' }}
+            type=raw,value=code-${{ needs.plan.outputs.code }},enable=${{ github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main') }}
             type=ref,event=pr
+
+      # main: release the image dev already built from the same code (every
+      # file but the docs, which aren't in the image) instead of building
+      # it again. It's pulled by digest, scanned again below, and that same
+      # digest gets the release tags, so the release is exactly what was
+      # scanned. Without one (merged before dev's build finished, or a pull
+      # request from another branch), it's built as usual.
+      - name: Find dev's image of this code
+        id: promote
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}
+          CODE: ${{ needs.plan.outputs.code }}
+        run: |
+          image="${IMAGE,,}"
+          if digest=$(docker buildx imagetools inspect "$image:code-$CODE" --format '{{json .Manifest}}' | jq -er .digest); then
+            echo "Releasing $image:code-$CODE ($digest), built on dev from the same code"
+            echo "source=$image@$digest" >> "$GITHUB_OUTPUT"
+          else
+            echo "No image of this code from dev ($image:code-$CODE), building it"
+          fi
+
+      - name: Pull dev's image
+        if: steps.promote.outputs.source != ''
+        env:
+          SOURCE: ${{ steps.promote.outputs.source }}
+        run: |
+          docker pull "$SOURCE"
+          docker tag "$SOURCE" narwhal:scan
 
       # Built into the runner's Docker first, so it can be scanned before
       # anything is pushed.
       - name: Build
+        if: steps.promote.outputs.source == ''
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
@@ -324,7 +362,7 @@ jobs:
 
       # Same build, all layers from the cache.
       - name: Push
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && steps.promote.outputs.source == ''
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
@@ -333,6 +371,20 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
+
+      # The release tags on dev's image, by digest: nothing is rebuilt. Its
+      # labels still name the dev commit it was built from.
+      - name: Tag dev's image as the release
+        if: steps.promote.outputs.source != ''
+        env:
+          SOURCE: ${{ steps.promote.outputs.source }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          args=()
+          while read -r tag; do
+            if [ -n "$tag" ]; then args+=(--tag "$tag"); fi
+          done <<< "$TAGS"
+          docker buildx imagetools create "${args[@]}" "$SOURCE"
 
       # Everything this run checks passed, the image scan included: remember
       # this code, so a later run with only docs changes can skip it (see plan).
@@ -355,22 +407,47 @@ jobs:
       needs.build.result == 'success'
     runs-on: ubuntu-24.04
     permissions:
-      contents: write
+      contents: write # the tag and the release
+      pull-requests: read # the merged pull requests' commits, for the notes
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the commits since the previous release
+          persist-credentials: false
+
+      # The commits of the pull requests merged since the previous release,
+      # by area (.github/scripts/release-notes.sh), above GitHub's generated
+      # notes, which list only the pull requests. Without them (first
+      # release, or the script failed) the release still goes out.
+      - name: Release notes
+        if: needs.plan.outputs.previous != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PREVIOUS: ${{ needs.plan.outputs.previous }}
+        run: |
+          .github/scripts/release-notes.sh "$PREVIOUS" "$GITHUB_SHA" > "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md" >> "$GITHUB_STEP_SUMMARY"
+
       # Tags created with GITHUB_TOKEN don't trigger workflows, so this won't rebuild.
       - name: Tag and create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: v${{ needs.plan.outputs.version }}
         run: |
+          notes=()
+          if [ -s "$RUNNER_TEMP/notes.md" ]; then
+            notes=(--notes-file "$RUNNER_TEMP/notes.md")
+          fi
           gh release create "$VERSION" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "$VERSION" \
-            --generate-notes
+            --generate-notes "${notes[@]}"
 
   # Pull requests: one comment with the results and the scan tables (Trivy,
-  # hadolint, zizmor), updated on every run. (Pull requests from forks get a read-only token: no comment.)
+  # hadolint, zizmor), updated on every run. (Pull requests from forks get a
+  # read-only token: no comment.)
   # When the code already passed (only the docs changed), the comment keeps
   # that run's results.
   report:
