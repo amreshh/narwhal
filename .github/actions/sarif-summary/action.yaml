@@ -1,0 +1,42 @@
+name: SARIF summary
+description: >-
+  A markdown table of the findings in a SARIF report (hadolint, zizmor…) for
+  the job summary. On pull requests it's also kept as the scan-summary-<name>
+  artifact, for the comment the ci workflow's report job writes.
+inputs:
+  sarif:
+    description: The SARIF file.
+    required: true
+  name:
+    description: Short name, for the artifact (scan-summary-<name>) and its file (<name>-summary.md).
+    required: true
+  title:
+    description: The table's heading.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Summary
+      shell: bash
+      env:
+        SARIF: ${{ inputs.sarif }}
+        OUT: ${{ runner.temp }}/${{ inputs.name }}-summary.md
+        TITLE: ${{ inputs.title }}
+        SCRIPT: ${{ github.action_path }}/summary.jq
+        # Links to the files as they are in the commit that was checked.
+        SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      run: |
+        jq -r -f "$SCRIPT" \
+          --arg title "$TITLE" \
+          --arg blob "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$SHA" \
+          --arg root "$GITHUB_WORKSPACE/" \
+          "$SARIF" > "$OUT"
+        cat "$OUT" >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Keep it for the pull request comment
+      if: github.event_name == 'pull_request'
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: scan-summary-${{ inputs.name }}
+        path: ${{ runner.temp }}/${{ inputs.name }}-summary.md
+        retention-days: 7

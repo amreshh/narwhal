@@ -36,10 +36,20 @@ jobs:
       # SARIF to Security → Code scanning. zizmor never fails in this mode,
       # so the next step does the checking.
       - name: zizmor report
+        id: report
         if: ${{ !github.event.pull_request.head.repo.fork }} # forks get a read-only token
         uses: zizmorcore/zizmor-action@45d7276c9ca790aabd705e31ca99c6185c3e76dd # v0.8.1
         with:
           version: 1.32.0
+
+      # The findings as a table: in the run summary and the pull request comment.
+      - name: zizmor table
+        if: ${{ !github.event.pull_request.head.repo.fork }}
+        uses: $/.github/actions/sarif-summary
+        with:
+          sarif: ${{ steps.report.outputs.output-file }}
+          name: zizmor
+          title: Workflow security (zizmor)
 
       # Fails on findings and marks them on the workflow lines.
       - name: zizmor

@@ -110,7 +110,8 @@ Every push and pull request runs one pipeline, `ci`:
 
 - **push to `dev`**: the tests, then the image build (`:latest`)
 - **pull request**: the tests, `lint`, `security` and a short `fuzz` run side by side,
-  then the image build and scan (nothing pushed); a comment on the PR sums up the results
+  then the image build and scan (nothing pushed); a comment on the PR sums up the results,
+  with tables of the Trivy, hadolint and zizmor findings
 - **push to `main`**: the same checks, then the release build and release
 
 Changes to only the docs (Markdown files and `docs/`) skip the tests, build and

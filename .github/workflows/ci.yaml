@@ -7,7 +7,8 @@ name: ci
 #                  main after a merge)
 #   pull request   tests, lint, security and fuzzing side by side, then build
 #                  and scan the image (nothing pushed). A comment on the PR
-#                  sums up the results.
+#                  sums up the results, with the Trivy, hadolint and zizmor
+#                  findings.
 #   push to main   the same checks, then the release build: the next version
 #                  (see below) as :1.2.3, :1.2, :1, a git tag v1.2.3 and a
 #                  GitHub Release with generated notes
@@ -245,8 +246,15 @@ jobs:
       packages: write
       security-events: write # the image scan's report
     steps:
+      # Pull requests: the head commit, not GitHub's test merge commit, so Trivy's
+      # report is uploaded for the head commit (upload-sarif uses the commit
+      # that's checked out). GitHub can rebuild the merge commit at any time,
+      # and code scanning then blocks the merge until it has results for the
+      # new one. The branch rules keep pull requests up to date with main, so
+      # both have the same files. (Empty on other events: the default.)
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -309,7 +317,7 @@ jobs:
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: image-scan
+          name: scan-summary-trivy
           path: trivy-summary.md
           if-no-files-found: ignore
           retention-days: 7
@@ -361,8 +369,8 @@ jobs:
             --title "$VERSION" \
             --generate-notes
 
-  # Pull requests: one comment with the results and the image scan, updated
-  # on every run. (Pull requests from forks get a read-only token: no comment.)
+  # Pull requests: one comment with the results and the scan tables (Trivy,
+  # hadolint, zizmor), updated on every run. (Pull requests from forks get a read-only token: no comment.)
   # When the code already passed (only the docs changed), the comment keeps
   # that run's results.
   report:
@@ -374,13 +382,14 @@ jobs:
     permissions:
       pull-requests: write # the comment
     steps:
-      # Missing when the image wasn't built (a check failed first).
-      - name: Get the scan table
-        if: needs.build.result != 'skipped'
+      # The scan tables: Trivy (build), hadolint (lint) and zizmor (security).
+      # One is missing when its job didn't get that far.
+      - name: Get the scan tables
         continue-on-error: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: image-scan
+          pattern: scan-summary-*
+          merge-multiple: true
 
       - name: Comment on the pull request
         env:
@@ -416,10 +425,12 @@ jobs:
             echo "| Fuzzing | $(icon "$FUZZ") |"
             echo "| Image build and scan | $(icon "$BUILD") |"
             echo
-            if [ -f trivy-summary.md ]; then
-              cat trivy-summary.md
-              echo
-            fi
+            for scan in trivy hadolint zizmor; do
+              if [ -f "$scan-summary.md" ]; then
+                cat "$scan-summary.md"
+                echo
+              fi
+            done
             echo "[Run details]($RUN_URL) · [Code scanning alerts for this PR]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/security/code-scanning?query=pr%3A$PR+is%3Aopen)"
           } > comment.md
 
