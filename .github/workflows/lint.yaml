@@ -15,8 +15,11 @@ name: lint
 on:
   workflow_call:
     inputs:
-      docs-only:
-        description: Only the docs changed, so only the spell check runs
+      code-passed:
+        description: >-
+          This code already passed rustfmt and clippy (only the docs changed
+          since), so they're skipped. The rest still runs: the spell check,
+          and hadolint for code scanning.
         type: boolean
         default: false
   workflow_dispatch:
@@ -26,7 +29,7 @@ permissions:
 
 jobs:
   fmt:
-    if: ${{ !inputs.docs-only }}
+    if: ${{ !inputs.code-passed }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -52,7 +55,7 @@ jobs:
         run: leptosfmt --check frontend/src
 
   clippy:
-    if: ${{ !inputs.docs-only }}
+    if: ${{ !inputs.code-passed }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -83,7 +86,6 @@ jobs:
       - uses: crate-ci/typos@4c8b7f51ca60df14e3c5ca82770dfbbe6c3dae85 # v1.52.0
 
   actionlint:
-    if: ${{ !inputs.docs-only }}
     runs-on: ubuntu-24.04
     env:
       VERSION: 1.7.12
@@ -103,7 +105,6 @@ jobs:
           ./actionlint -color
 
   hadolint:
-    if: ${{ !inputs.docs-only }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -128,6 +129,11 @@ jobs:
         with:
           sarif_file: hadolint.sarif
           category: hadolint
+          # Pull requests: on the head commit, not GitHub's test merge commit.
+          # GitHub can rebuild that one at any time, and code scanning then
+          # blocks the merge until it has results for the new one.
+          ref: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/head', github.event.pull_request.number) || github.ref }}
+          sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
 
       # Same check, readable in the log, and fails the job.
       - name: hadolint
@@ -137,7 +143,6 @@ jobs:
           failure-threshold: warning
 
   kubeconform:
-    if: ${{ !inputs.docs-only }}
     runs-on: ubuntu-24.04
     env:
       VERSION: 0.8.0

@@ -114,8 +114,10 @@ Every push and pull request runs one pipeline, `ci`:
 - **push to `main`**: the same checks, then the release build and release
 
 Changes to only the docs (Markdown files and `docs/`) skip the tests, build and
-release once the rest of the code has passed them; a pull request still
-spell-checks the docs.
+release once the rest of the code has passed them. A pull request still runs the
+spell check, and the scans that the branch rules want code scanning results from
+for every commit (hadolint, zizmor, and Trivy on the image, which then comes
+straight from the build cache).
 
 | Workflow | What it does |
 | --- | --- |

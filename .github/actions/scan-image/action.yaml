@@ -55,6 +55,11 @@ runs:
       with:
         sarif_file: trivy.sarif
         category: trivy-image
+        # Pull requests: on the head commit, not GitHub's test merge commit.
+        # GitHub can rebuild that one at any time, and code scanning then
+        # blocks the merge until it has results for the new one.
+        ref: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/head', github.event.pull_request.number) || github.ref }}
+        sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
 
     - name: Check
       shell: bash

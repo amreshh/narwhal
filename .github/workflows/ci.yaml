@@ -16,8 +16,8 @@ name: ci
 #                  minors can break. A tag like v1.2.3-rc1 gets only that tag.
 #
 #   Changes to nothing but the docs (Markdown files and docs/) skip the tests,
-#   build and release once the rest has passed them; a pull request still
-#   spell-checks the docs. See plan.
+#   build and release once the rest has passed them. A pull request still runs
+#   the spell check and what code scanning needs (see plan).
 #
 #   plan ─┬─ test ─────┐
 #         ├─ lint ─────┤               ┌─ release (main)
@@ -57,8 +57,11 @@ jobs:
   # an image or a release:
   # - Pull requests and dev pushes skip the checks when the code (every file
   #   but the docs) already passed them: the build job remembers each code
-  #   version that passed, in the Actions cache. Pull requests still run the
-  #   spell check. This also skips dev after it's reset to main.
+  #   version that passed, in the Actions cache. This also skips dev after
+  #   it's reset to main. Pull requests skip only the slow ones (tests,
+  #   rustfmt, clippy, fuzzing): the branch rules want code scanning results
+  #   (Hadolint, zizmor, Trivy) for every new commit, so those run, and the
+  #   spell check covers the docs.
   # - main releases only when more than the docs changed since the last release.
   # Manual runs and tags always run everything.
   plan:
@@ -168,7 +171,7 @@ jobs:
   # lint, security and fuzz: pull requests, main and tags, not dev pushes
   # (dev gets the quick tests + build; the pull request runs everything).
 
-  # Formatting and lints (lint.yaml). Only the spell check when only the docs changed.
+  # Formatting and lints (lint.yaml). Without rustfmt and clippy when the code already passed.
   lint:
     needs: plan
     if: >-
@@ -177,7 +180,7 @@ jobs:
       (github.ref != 'refs/heads/main' || needs.plan.outputs.version != '')
     uses: $/.github/workflows/lint.yaml
     with:
-      docs-only: ${{ needs.plan.outputs.tested == 'true' }}
+      code-passed: ${{ needs.plan.outputs.tested == 'true' }}
     permissions:
       contents: read
       security-events: write # hadolint's report
@@ -186,7 +189,7 @@ jobs:
   security:
     needs: plan
     if: >-
-      !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.tested != 'true' &&
+      !cancelled() && needs.plan.result == 'success' &&
       !(github.event_name == 'push' && github.ref == 'refs/heads/dev') &&
       (github.ref != 'refs/heads/main' || needs.plan.outputs.version != '')
     uses: $/.github/workflows/security.yaml
@@ -226,11 +229,15 @@ jobs:
           esac
 
   # Runs when the tests passed and no other check failed (lint, security and
-  # fuzz are skipped on dev pushes).
+  # fuzz are skipped on dev pushes). Also on a pull request whose code already
+  # passed: code scanning needs Trivy's results for every new commit, and the
+  # image comes straight from the layer cache (the docs aren't in it).
   build:
     needs: [plan, test, lint, security, fuzz]
     if: >-
-      !cancelled() && needs.test.result == 'success' &&
+      !cancelled() &&
+      (needs.test.result == 'success' ||
+        (github.event_name == 'pull_request' && needs.plan.outputs.tested == 'true')) &&
       !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
     runs-on: ubuntu-24.04
     permissions:
@@ -322,11 +329,13 @@ jobs:
       # Everything this run checks passed, the image scan included: remember
       # this code, so a later run with only docs changes can skip it (see plan).
       - name: Mark this code as passed
+        if: needs.plan.outputs.tested != 'true'
         env:
           KEY: ${{ needs.plan.outputs.key }}
         run: echo "$KEY" > .ci-passed
 
-      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - if: needs.plan.outputs.tested != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .ci-passed
           key: ${{ needs.plan.outputs.key }}
