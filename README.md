@@ -114,7 +114,8 @@ Every push and pull request runs one pipeline, `ci`:
   with tables of the Trivy, hadolint and zizmor findings
 - **push to `main`**: the same checks, then the release: the image `dev` already built
   from the same code is rescanned and tagged with the new version (built fresh only when
-  there's none), plus a git tag and a GitHub Release
+  there's none), plus a git tag and a GitHub Release whose notes list the merged commits
+  by area
 
 Changes to only the docs (Markdown files and `docs/`) skip the tests, build and
 release once the rest of the code has passed them. A pull request still runs the
@@ -129,7 +130,7 @@ straight from the build cache).
 | `security` | zizmor (workflow security); also weekly. CodeQL runs through GitHub's default setup |
 | `fuzz` | Fuzzes the document readers: a minute per target in `ci`, 10 minutes weekly |
 | `image scan` | Scans the latest released image daily, so newly published vulnerabilities show up; fails (GitHub emails you) on fixable HIGH/CRITICAL ones |
-| `labeler` | Labels pull requests by the files they change (`.github/labeler.yaml`) |
+| `labeler` | Labels pull requests by the areas of the code they change (`.github/labeler.yaml`); release notes group commits by the same areas |
 
 Reports from Trivy, zizmor and hadolint go to Security → Code scanning. Actions
 are pinned to commits and the Dockerfile's base images to digests; Dependabot

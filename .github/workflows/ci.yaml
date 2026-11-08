@@ -73,6 +73,7 @@ jobs:
       contents: read
     outputs:
       version: ${{ steps.next.outputs.version }}
+      previous: ${{ steps.next.outputs.previous }}
       key: ${{ steps.code.outputs.key }}
       code: ${{ steps.code.outputs.code }}
       tested: ${{ steps.tested.outputs.cache-hit }}
@@ -146,6 +147,7 @@ jobs:
 
           echo "Releasing v$version (previous: ${last:-none})"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "previous=$last" >> "$GITHUB_OUTPUT"
 
   # Every run except code that already passed, or main with nothing to release.
   test:
@@ -405,22 +407,47 @@ jobs:
       needs.build.result == 'success'
     runs-on: ubuntu-24.04
     permissions:
-      contents: write
+      contents: write # the tag and the release
+      pull-requests: read # the merged pull requests' commits, for the notes
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the commits since the previous release
+          persist-credentials: false
+
+      # The commits of the pull requests merged since the previous release,
+      # by area (.github/scripts/release-notes.sh), above GitHub's generated
+      # notes, which list only the pull requests. Without them (first
+      # release, or the script failed) the release still goes out.
+      - name: Release notes
+        if: needs.plan.outputs.previous != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PREVIOUS: ${{ needs.plan.outputs.previous }}
+        run: |
+          .github/scripts/release-notes.sh "$PREVIOUS" "$GITHUB_SHA" > "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md" >> "$GITHUB_STEP_SUMMARY"
+
       # Tags created with GITHUB_TOKEN don't trigger workflows, so this won't rebuild.
       - name: Tag and create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: v${{ needs.plan.outputs.version }}
         run: |
+          notes=()
+          if [ -s "$RUNNER_TEMP/notes.md" ]; then
+            notes=(--notes-file "$RUNNER_TEMP/notes.md")
+          fi
           gh release create "$VERSION" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "$VERSION" \
-            --generate-notes
+            --generate-notes "${notes[@]}"
 
   # Pull requests: one comment with the results and the scan tables (Trivy,
-  # hadolint, zizmor), updated on every run. (Pull requests from forks get a read-only token: no comment.)
+  # hadolint, zizmor), updated on every run. (Pull requests from forks get a
+  # read-only token: no comment.)
   # When the code already passed (only the docs changed), the comment keeps
   # that run's results.
   report:

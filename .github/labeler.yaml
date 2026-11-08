@@ -1,6 +1,18 @@
-# Labels for pull requests, by the files they change (workflows/labeler.yaml).
-# A label that doesn't exist yet is created the first time it's used; set its
-# colour and description under Issues → Labels.
+# Areas of the code, by the files a change touches:
+# - Pull requests get a label for each area they touch (workflows/labeler.yaml).
+#   A label that doesn't exist yet is created the first time it's used; set
+#   its colour and description under Issues → Labels.
+# - Release notes list each commit under the first area it touches, in this
+#   order (scripts/release-notes.sh), so put the more specific areas first.
+
+# Bypassed vulnerabilities: a maintainer's decision worth a second look.
+security:
+  - changed-files:
+      - any-glob-to-any-file: .trivyignore.yaml
+
+image:
+  - changed-files:
+      - any-glob-to-any-file: [Dockerfile, .dockerignore]
 
 server:
   - changed-files:
@@ -18,18 +30,6 @@ shared:
   - changed-files:
       - any-glob-to-any-file: shared/**
 
-fuzz:
-  - changed-files:
-      - any-glob-to-any-file: fuzz/**
-
-dependencies:
-  - changed-files:
-      - any-glob-to-any-file: Cargo.lock
-
-image:
-  - changed-files:
-      - any-glob-to-any-file: [Dockerfile, .dockerignore]
-
 deploy:
   - changed-files:
       - any-glob-to-any-file: deploy/**
@@ -39,12 +39,16 @@ ci:
       - any-glob-to-any-file:
           - .github/workflows/**
           - .github/actions/**
+          - .github/scripts/**
           - .github/*.yaml
 
-# Bypassed vulnerabilities: a maintainer's decision worth a second look.
-security:
+fuzz:
   - changed-files:
-      - any-glob-to-any-file: .trivyignore.yaml
+      - any-glob-to-any-file: fuzz/**
+
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file: Cargo.lock
 
 # The same files ci.yaml treats as docs (no tests, build or release).
 docs:
