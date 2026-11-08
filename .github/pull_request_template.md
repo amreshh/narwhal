@@ -17,4 +17,4 @@ and the image build and scan): commands, what you tried in the app. -->
 - [ ] README and comments match the new behaviour
 - [ ] Dockerfile changes: the image runs (`docker run`, then the app and `/healthz`)
 - [ ] deploy/ changes: `kubectl kustomize deploy` renders
-- [ ] Anything added to `.trivyignore` says why
+- [ ] Bypasses added to `.trivyignore.yaml` have a statement and an expiry date

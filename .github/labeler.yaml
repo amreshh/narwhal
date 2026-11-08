@@ -41,6 +41,11 @@ ci:
           - .github/actions/**
           - .github/*.yaml
 
+# Bypassed vulnerabilities: a maintainer's decision worth a second look.
+security:
+  - changed-files:
+      - any-glob-to-any-file: .trivyignore.yaml
+
 # The same files ci.yaml treats as docs (no tests, build or release).
 docs:
   - changed-files:

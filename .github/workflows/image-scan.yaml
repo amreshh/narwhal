@@ -3,9 +3,8 @@ name: image scan
 # Scans the latest released image every day, so vulnerabilities published
 # since the release show up in Security → Code scanning (and in the run
 # summary) without waiting for the next one. Fails, and GitHub emails you,
-# when there's a HIGH or CRITICAL one with a fix: merge Dependabot's base
-# image update (or another fix) to release a rebuilt image, or accept it in
-# .trivyignore with a reason.
+# when there's a HIGH or CRITICAL one with a fix: release a rebuilt image
+# with the fix, or bypass it in .trivyignore.yaml with a reason.
 on:
   schedule:
     - cron: "23 5 * * *" # daily, 05:23 UTC
@@ -18,7 +17,7 @@ jobs:
   scan:
     runs-on: ubuntu-24.04
     permissions:
-      contents: read # the latest release, .trivyignore
+      contents: read # the latest release, .trivyignore.yaml
       packages: read # pull the image
       security-events: write # the report
     steps:

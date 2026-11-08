@@ -26,10 +26,11 @@ name: ci
 #
 # lint, security and fuzz are in their own files and called from here;
 # security and fuzz also run weekly on their own. The image is scanned with
-# Trivy (.github/actions/scan-image): a table in the run summary, and builds
-# fail on HIGH or CRITICAL vulnerabilities that have a fix. Reports from
-# Trivy, zizmor and hadolint go to Security → Code scanning; image-scan.yaml
-# rescans the latest release daily. `checks` sums up the checks for branch rules.
+# Trivy (.github/actions/scan-image): every vulnerability in the run summary,
+# and builds fail on HIGH or CRITICAL ones that have a fix, unless bypassed
+# in .trivyignore.yaml. Reports from Trivy, zizmor and hadolint go to
+# Security → Code scanning; image-scan.yaml rescans the latest release daily.
+# `checks` sums up the checks for branch rules.
 #
 # Version on main: bumps the patch of the latest vX.Y.Z tag. Put "#minor" or
 # "#major" in a commit message (e.g. the merge commit) to bump that instead.

@@ -119,7 +119,7 @@ spell-checks the docs.
 
 | Workflow | What it does |
 | --- | --- |
-| `ci` | The pipeline. Every image is scanned with Trivy: builds fail on fixable HIGH/CRITICAL vulnerabilities, and the run summary has a table. Its `checks` job is the one to require in branch rules |
+| `ci` | The pipeline. Every image is scanned with Trivy: the run summary lists every vulnerability and whether it has a fix, and builds fail on fixable HIGH/CRITICAL ones unless a maintainer bypasses them in `.trivyignore.yaml` (with a reason and an expiry date). Its `checks` job is the one to require in branch rules |
 | `lint` | rustfmt + leptosfmt, clippy, typos, actionlint, hadolint, kubeconform |
 | `security` | zizmor (workflow security); also weekly. CodeQL runs through GitHub's default setup |
 | `fuzz` | Fuzzes the document readers: a minute per target in `ci`, 10 minutes weekly |
