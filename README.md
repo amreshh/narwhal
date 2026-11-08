@@ -5,7 +5,7 @@ like KDE's Dolphin. The UI is Rust compiled to WebAssembly
 ([Leptos](https://leptos.dev)); the backend is a small [Axum](https://github.com/tokio-rs/axum)
 server that confines every operation to one root directory (your PVC).
 
-One container, one port, ~30 MB image, ~650 KB of gzipped WASM.
+One container, one port, ~5 MB image, ~650 KB of gzipped WASM.
 
 ![The column view: one column per folder, with a preview of the selected photo](docs/screenshots/columns.png)
 
