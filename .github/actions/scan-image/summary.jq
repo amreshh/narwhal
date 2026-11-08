@@ -1,5 +1,5 @@
 # Markdown summary of a Trivy JSON report, for the job summary and the pull
-# request comment (see action.yml). Lists every vulnerability, with or without
+# request comment (see action.yaml). Lists every vulnerability, with or without
 # a fix. Builds fail on HIGH or CRITICAL ones that have a fix, unless a
 # maintainer bypassed them in .trivyignore.yaml: Trivy (with --show-suppressed)
 # reports those as modified findings, with the statement as the reason.
