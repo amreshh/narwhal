@@ -9,9 +9,10 @@ resources:
   - service.yaml
   - ingress.yaml
 
-# Point this at the image you pushed:
+# Where the image comes from; its version is set in deployment.yaml. To run an
+# image you pushed yourself, point newName at it (and add newTag if its version
+# differs).
 #   kubectl kustomize deploy | kubectl apply -f -   (or: kubectl apply -k deploy)
 images:
   - name: narwhal
     newName: ghcr.io/amreshh/narwhal
-    newTag: latest

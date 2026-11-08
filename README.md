@@ -151,7 +151,9 @@ The build stage needs network access to crates.io and GitHub (Trunk downloads
 
 ## Deploying to Kubernetes
 
-1. Push the image and set its name in `deploy/kustomization.yaml`.
+1. The manifests run a release from GHCR: to upgrade, bump its version in
+   `deploy/deployment.yaml`. To run your own build, push it and set its name in
+   `deploy/kustomization.yaml`.
 2. Set your hostname in `deploy/ingress.yaml` and **enable authentication**
    (see below).
 3. `kubectl apply -k deploy`

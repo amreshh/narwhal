@@ -2,6 +2,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: narwhal
+  namespace: narwhal
   labels:
     app.kubernetes.io/name: narwhal
 spec:
