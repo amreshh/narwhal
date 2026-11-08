@@ -112,7 +112,9 @@ Every push and pull request runs one pipeline, `ci`:
 - **pull request**: the tests, `lint`, `security` and a short `fuzz` run side by side,
   then the image build and scan (nothing pushed); a comment on the PR sums up the results,
   with tables of the Trivy, hadolint and zizmor findings
-- **push to `main`**: the same checks, then the release build and release
+- **push to `main`**: the same checks, then the release: the image `dev` already built
+  from the same code is rescanned and tagged with the new version (built fresh only when
+  there's none), plus a git tag and a GitHub Release
 
 Changes to only the docs (Markdown files and `docs/`) skip the tests, build and
 release once the rest of the code has passed them. A pull request still runs the
