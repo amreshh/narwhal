@@ -2,22 +2,22 @@ name: ci
 
 # What runs when:
 #
-#   push to dev    tests, then build ghcr.io/<repo>:<short-sha>, :latest and
-#                  :code-<fingerprint> (skipped when the code didn't change,
-#                  e.g. dev reset to main after a merge)
+#   push to dev    tests, then build ghcr.io/<repo>:<short-sha> and :latest, to
+#                  try out (skipped when the code didn't change, e.g. dev
+#                  reset to main after a merge)
 #   pull request   tests, lint, security, fuzzing and dependency review side by
-#                  side, then build the image and smoke-test it (nothing
-#                  pushed). A comment on the PR sums up the results, with the
-#                  dependency review, hadolint and zizmor findings and the
-#                  smoke test's checks.
+#                  side, then build the image and smoke-test it. Once it
+#                  passes, it's pushed as :code-<fingerprint> (not from forks)
+#                  for the release. A comment on the PR sums up the results,
+#                  with the dependency review, hadolint and zizmor findings
+#                  and the smoke test's checks.
 #   push to main   the release, with no checks: the branch rules only merge a
 #                  pull request whose checks passed, up to date with main, so
 #                  main has exactly the files it checked. The release: the
-#                  image dev built from the same code with the next version
-#                  (see below) set in it (same layers, nothing rebuilt),
-#                  pushed as :1.2.3, :1.2, :1 (built fresh only when dev has
-#                  none), a git tag v1.2.3 and a GitHub Release with
-#                  generated notes
+#                  image the pull request tested, with the next version (see
+#                  below) set in it (same layers, nothing rebuilt), pushed as
+#                  :1.2.3, :1.2, :1 (built fresh only when there's none), a
+#                  git tag v1.2.3 and a GitHub Release with generated notes
 #   tag v1.2.3     every check, then :1.2.3, :1.2, :1 (manual; the tag must be
 #                  on main). No major-only tag while on 0.x: 0.x minors can
 #                  break. A tag like v1.2.3-rc1 gets only that tag.
@@ -64,6 +64,11 @@ concurrency:
 # No token permissions unless a job asks for them.
 permissions: {}
 
+env:
+  # The docs, as git pathspecs separated by spaces. Every other file is the
+  # code, which the fingerprints in plan and build cover.
+  DOCS: ":(exclude)*.md :(exclude)docs/"
+
 jobs:
   # Decides what this run has to do. Docs changes (DOCS) don't need the tests,
   # an image or a release:
@@ -86,14 +91,11 @@ jobs:
       version: ${{ steps.next.outputs.version }}
       previous: ${{ steps.next.outputs.previous }}
       key: ${{ steps.code.outputs.key }}
-      code: ${{ steps.code.outputs.code }}
       tested: ${{ steps.tested.outputs.cache-hit }}
       fuzz: ${{ steps.readers.outputs.fuzz }}
     env:
-      # git pathspecs, separated by spaces
-      DOCS: ":(exclude)*.md :(exclude)docs/"
-      # What the fuzzing covers: the readers, what they're built with, and the
-      # fuzzing itself.
+      # What the fuzzing covers (git pathspecs): the readers, what they're
+      # built with, and the fuzzing itself.
       READERS: "office/ fuzz/ Cargo.toml Cargo.lock .github/workflows/fuzz.yaml"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -113,8 +115,6 @@ jobs:
             checks=all
           fi
           echo "key=ci-passed-$checks-$code" >> "$GITHUB_OUTPUT"
-          # For the image tag :code-<fingerprint> (see build).
-          echo "code=${code:0:20}" >> "$GITHUB_OUTPUT"
 
       # Only looks the key up: nothing from the cache goes into a build.
       - name: Did this code already pass?
@@ -336,14 +336,22 @@ jobs:
       packages: write
     steps:
       # Pull requests: the head commit (the one NARWHAL_COMMIT names), not
-      # GitHub's test merge commit. The branch rules keep pull requests up to
-      # date with main, so both have the same files. (Empty on other events:
-      # the default.)
+      # GitHub's test merge commit. (Empty on other events: the default.)
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
+
+      # Of exactly the files built here: every file but the docs, which
+      # aren't in the image. Pull requests push the image they tested as
+      # :code-<fingerprint>, and main releases the one with its fingerprint.
+      - name: Fingerprint the code
+        id: code
+        run: |
+          read -ra docs <<< "$DOCS"
+          code=$(git ls-files -s -- . "${docs[@]}" | sha256sum | cut -d' ' -f1)
+          echo "code=${code:0:20}" >> "$GITHUB_OUTPUT"
 
       - name: Check release tag is on main
         if: startsWith(github.ref, 'refs/tags/')
@@ -355,8 +363,9 @@ jobs:
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
+      # Pull requests from forks get a read-only token: they push nothing.
       - name: Log in to GHCR
-        if: github.event_name != 'pull_request'
+        if: ${{ !github.event.pull_request.head.repo.fork }}
         uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
@@ -391,7 +400,6 @@ jobs:
             type=semver,pattern={{major}}.{{minor}},value=${{ needs.plan.outputs.version }}
             type=semver,pattern={{major}},value=${{ needs.plan.outputs.version }},enable=${{ !startsWith(needs.plan.outputs.version, '0.') && !startsWith(github.ref, 'refs/tags/v0.') }}
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/dev' }}
-            type=raw,value=code-${{ needs.plan.outputs.code }},enable=${{ github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main') }}
             type=ref,event=pr
 
       # Which build this is, for the app's About dialog (NARWHAL_VERSION and
@@ -408,30 +416,29 @@ jobs:
           esac
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      # main: release the image dev already built from the same code (every
-      # file but the docs, which aren't in the image) instead of building
-      # it again. It's taken by digest and gets the release's version and
-      # commit as settings (.github/release/Dockerfile: the same layers,
-      # nothing recompiled). Without one (merged before dev's build
-      # finished, or a pull request from another branch), it's built as
-      # usual.
-      - name: Find dev's image of this code
+      # main: release the image its pull request built and smoke-tested,
+      # found by the code's fingerprint, instead of building it again. It's
+      # taken by digest and gets the release's version and commit as
+      # settings (.github/release/Dockerfile: the same layers, nothing
+      # recompiled). Without one (a pull request from a fork, which can't
+      # push), it's built as usual.
+      - name: Find the image the pull request tested
         id: promote
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           IMAGE: ghcr.io/${{ github.repository }}
-          CODE: ${{ needs.plan.outputs.code }}
+          CODE: ${{ steps.code.outputs.code }}
         run: |
           image="${IMAGE,,}"
           if digest=$(docker buildx imagetools inspect "$image:code-$CODE" --format '{{json .Manifest}}' | jq -er .digest); then
-            echo "Releasing $image:code-$CODE ($digest), built on dev from the same code"
+            echo "Releasing $image:code-$CODE ($digest), the image its pull request tested"
             echo "source=$image@$digest" >> "$GITHUB_OUTPUT"
           else
-            echo "No image of this code from dev ($image:code-$CODE), building it"
+            echo "No tested image of this code ($image:code-$CODE), building it"
           fi
 
-      # Pull requests: built to check that it builds and works (below);
-      # nothing is pushed.
+      # Pull requests: built to check that it builds and works (below), and
+      # pushed only once it does.
       - name: Build
         if: github.event_name == 'pull_request'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -515,6 +522,18 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      # Pull requests: the image that passed the smoke test, for main to
+      # release when this one merges. (Not from forks: they can't push.)
+      - name: Push the tested image
+        if: github.event_name == 'pull_request' && !github.event.pull_request.head.repo.fork
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}
+          CODE: ${{ steps.code.outputs.code }}
+        run: |
+          image="${IMAGE,,}:code-$CODE"
+          docker tag narwhal:pr "$image"
+          docker push "$image"
+
       - name: Build and push
         if: github.event_name != 'pull_request' && steps.promote.outputs.source == ''
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -531,11 +550,11 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # dev's image with the release tags and labels, and main's commit: the
-      # one the release tag points at, with the same code as the dev commit
-      # the image was built from. Only its settings are new: the layers are
-      # already in the registry, so nothing else is uploaded.
-      - name: Push dev's image as the release
+      # The tested image with the release tags and labels, and main's commit:
+      # the one the release tag points at, with the same code as the pull
+      # request's. Only its settings are new: the layers are already in the
+      # registry, so nothing else is uploaded.
+      - name: Release the tested image
         if: steps.promote.outputs.source != ''
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
