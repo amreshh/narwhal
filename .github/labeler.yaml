@@ -5,10 +5,11 @@
 # - Release notes list each commit under the first area it touches, in this
 #   order (scripts/release-notes.sh), so put the more specific areas first.
 
-# Bypassed vulnerabilities: a maintainer's decision worth a second look.
+# Bypassed vulnerabilities (and the rest of the dependency review settings):
+# a maintainer's decision worth a second look.
 security:
   - changed-files:
-      - any-glob-to-any-file: .trivyignore.yaml
+      - any-glob-to-any-file: .github/dependency-review.yaml
 
 image:
   - changed-files:

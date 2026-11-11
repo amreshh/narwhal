@@ -2,11 +2,14 @@ name: fuzz
 
 # Feeds the office document readers (office/) random and malformed files and
 # fails on a panic, a hang (10 s) or runaway memory use. The ci workflow runs
-# it for a minute per target on every push and pull request; on its own it
-# runs weekly for 10 minutes per target, building on the inputs found so far.
+# it for a minute per target when a pull request changes the readers, their
+# dependencies or the fuzzing (tags and manual runs always fuzz); on its own
+# it runs weekly for 10 minutes per target, building on the inputs found so
+# far.
 #
 # A crashing input is uploaded as an artifact. Reproduce it with
 #   cp Cargo.lock fuzz/ && cargo +nightly fuzz run <target> <file>
+# (the nightly in NIGHTLY below, if a newer one doesn't crash).
 on:
   workflow_call:
     inputs:
@@ -39,13 +42,18 @@ jobs:
     env:
       TARGET: ${{ matrix.target }}
       SECONDS_PER_TARGET: ${{ inputs.seconds || (github.event_name == 'schedule' && '600') || '60' }}
+      # A fixed nightly, not the latest: rust-cache's key includes the
+      # compiler version, so with each day's new nightly the first run missed
+      # the cache and compiled cargo-fuzz and the targets again. Move it
+      # forward every few months, or when the fuzzing needs a newer one.
+      NIGHTLY: nightly-2026-11-11
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Toolchain
-        run: rustup toolchain install nightly --profile minimal
+        run: rustup toolchain install "$NIGHTLY" --profile minimal
 
       # fuzz/ has no lockfile of its own: start from the app's so the readers
       # are fuzzed with the dependency versions that ship.
@@ -69,7 +77,7 @@ jobs:
 
       - name: Fuzz
         run: >-
-          cargo +nightly fuzz run "$TARGET" --
+          cargo "+$NIGHTLY" fuzz run "$TARGET" --
           -max_total_time="$SECONDS_PER_TARGET" -max_len=65536 -timeout=10 -rss_limit_mb=2048
 
       - name: Upload crashing input

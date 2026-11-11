@@ -1,0 +1,26 @@
+# Dependency review (the dependencies job in workflows/ci.yaml): a pull
+# request fails when it adds a dependency (a crate, or an action the
+# workflows use), or changes one to a version, with a known HIGH or CRITICAL
+# vulnerability. Dependencies that are already released are watched by
+# Dependabot alerts instead, which open the fixes as pull requests (see
+# dependabot.yaml).
+# Options: https://github.com/actions/dependency-review-action#configuration-options
+
+fail-on-severity: high
+
+# Every scope, not only "runtime" (the default): Cargo.lock doesn't say which
+# crates only the tests use, so GitHub may not know a crate's scope.
+fail-on-scopes: [runtime, development, unknown]
+
+# Vulnerabilities only, with the version that fixes each: no license or
+# OpenSSF Scorecard checks.
+license-check: false
+show-openssf-scorecard: false
+show-patched-versions: true
+
+# Bypasses, by GitHub advisory ID: a maintainer's decision, with a comment
+# saying why and when to look at it again (the list has no expiry dates):
+#
+#   allow-ghsas:
+#     # Only reachable through X, which the server never uses. Look again in 2027-01.
+#     - GHSA-xxxx-xxxx-xxxx

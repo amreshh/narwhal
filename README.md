@@ -109,30 +109,36 @@ Fuzzing the document readers (needs nightly Rust and `cargo install cargo-fuzz`)
 Every push and pull request runs one pipeline, `ci`:
 
 - **push to `dev`**: the tests, then the image build (`:latest`)
-- **pull request**: the tests, `lint`, `security` and a short `fuzz` run side by side,
-  then the image build and scan (nothing pushed); a comment on the PR sums up the results,
-  with tables of the Trivy, hadolint and zizmor findings
-- **push to `main`**: the same checks, then the release: the image `dev` already built
-  from the same code gets the new version set in it (the same layers, nothing rebuilt),
-  is rescanned and pushed with the version's tags (built fresh only when there's none),
+- **pull request**: the tests, `lint`, `security`, a short `fuzz` run (when the document
+  readers changed) and GitHub's dependency review side by side, then the image build and
+  a smoke test that starts it and checks `/healthz`, the app's page and the API (nothing
+  pushed); a comment on the PR sums up the results, with the dependency review, hadolint
+  and zizmor findings
+- **push to `main`**: the release, with no checks: the branch rules only merge a pull
+  request whose checks passed, up to date with `main`. The image `dev` already built
+  from the same code gets the new version set in it (the same layers, nothing rebuilt)
+  and is pushed with the version's tags (built fresh only when there's none),
   plus a git tag and a GitHub Release whose notes list the merged commits by area
+- **tag `v1.2.3`**: every check, then the image with that version (a manual release)
 
 Changes to only the docs (Markdown files and `docs/`) skip the tests, build and
 release once the rest of the code has passed them. A pull request still runs the
-spell check, and the scans that the branch rules want code scanning results from
-for every commit (hadolint, zizmor, and Trivy on the image, which then comes
-straight from the build cache).
+quick checks, the spell check among them.
 
 | Workflow | What it does |
 | --- | --- |
-| `ci` | The pipeline. Every image is scanned with Trivy: the run summary lists every vulnerability and whether it has a fix, and builds fail on fixable HIGH/CRITICAL ones unless a maintainer bypasses them in `.trivyignore.yaml` (with a reason and an expiry date). Its `checks` job is the one to require in branch rules |
+| `ci` | The pipeline. Its dependency review fails a pull request that adds a dependency (a crate or an action), or changes one to a version, with a known HIGH/CRITICAL vulnerability, unless a maintainer bypasses it in `.github/dependency-review.yaml` (with a reason). Its `checks` job is the one to require in branch rules |
 | `lint` | rustfmt + leptosfmt, clippy, typos, actionlint, hadolint, kubeconform |
-| `security` | zizmor (workflow security); also weekly. CodeQL runs through GitHub's default setup |
-| `fuzz` | Fuzzes the document readers: a minute per target in `ci`, 10 minutes weekly |
-| `image scan` | Scans the latest released image daily, so newly published vulnerabilities show up; fails (GitHub emails you) on fixable HIGH/CRITICAL ones |
+| `security` | zizmor (workflow security); also weekly |
+| `codeql` | CodeQL code scanning of the Rust code and the workflows, on pull requests to `main`, pushes to `main` and weekly. The branch rules require its results |
+| `fuzz` | Fuzzes the document readers: a minute per target in `ci` when they, their dependencies or the fuzzing changed, 10 minutes weekly |
 | `labeler` | Labels pull requests by the areas of the code they change (`.github/labeler.yaml`); release notes group commits by the same areas |
 
-Reports from Trivy, zizmor and hadolint go to Security → Code scanning. Actions
+hadolint and zizmor fail the checks on any finding; their findings are tables in
+the run summary and the PR comment. Code scanning (Security → Code scanning) has
+CodeQL's results, and zizmor's too. Vulnerabilities found later in released
+dependencies show up as Dependabot alerts (GitHub emails you), and Dependabot
+opens a pull request with the fix when there is one. Actions
 are pinned to commits and the Dockerfile's base images to digests; Dependabot
 keeps both up to date.
 
