@@ -283,12 +283,27 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Labels and annotations: the description comes from the repo's
+      # description on GitHub, the source, revision and version from the run.
+      # The pushed image is an index (the image plus its provenance
+      # attestation), and GHCR's package page reads an index's annotations,
+      # not the image's labels, so the annotations go on the index too.
       - name: Metadata
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+          # metadata-action reads the license from a LICENSE file, and there is none.
+          EXTRA: |
+            org.opencontainers.image.title=Narwhal
+            org.opencontainers.image.authors=amreshh (https://github.com/amreshh)
+            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.documentation=${{ github.server_url }}/${{ github.repository }}#readme
         with:
           images: ghcr.io/${{ github.repository }}
           flavor: latest=false
+          labels: ${{ env.EXTRA }}
+          annotations: ${{ env.EXTRA }}
           # On main, semver tags come from the computed version; on tag pushes, from the tag.
           tags: |
             type=sha,prefix=,format=short,enable=${{ github.ref == 'refs/heads/dev' }}
@@ -398,6 +413,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
           cache-from: type=gha
 
       # The same build of dev's image, pushed with the release tags and
@@ -416,6 +432,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
 
       # Everything this run checks passed, the image scan included: remember
       # this code, so a later run with only docs changes can skip it (see plan).
