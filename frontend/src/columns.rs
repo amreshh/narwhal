@@ -11,7 +11,7 @@
 //! longest name.
 
 use crate::{
-    api, icons,
+    api, highlight, icons,
     office::OfficePreview,
     state::*,
     ui::{use_st, RenameBox},
@@ -492,10 +492,21 @@ pub(crate) fn TextPreview(entry: Entry, limit: u64) -> impl IntoView {
         });
     }
     let cut = entry.size > limit;
+    let lang = highlight::lang_for(&entry.name);
     move || match text.get() {
         None => view! { <pre class="textprev muted">"Loading…"</pre> }.into_any(),
         Some(Err(e)) => view! { <div class="col-note">{e}</div> }.into_any(),
         Some(Ok(t)) if t.is_empty() => view! { <div class="col-note">"Empty file"</div> }.into_any(),
-        Some(Ok(t)) => view! { <pre class="textprev">{t}{cut.then_some("\n…")}</pre> }.into_any(),
+        Some(Ok(t)) => match lang {
+            // Escaped by to_html: only its own spans are markup.
+            Some(lang) => {
+                let mut html = highlight::to_html(lang, &t);
+                if cut {
+                    html.push_str("\n…");
+                }
+                view! { <pre class="textprev" inner_html=html></pre> }.into_any()
+            }
+            None => view! { <pre class="textprev">{t}{cut.then_some("\n…")}</pre> }.into_any(),
+        },
     }
 }

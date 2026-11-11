@@ -1,5 +1,6 @@
 mod api;
 mod columns;
+mod highlight;
 // SVG markup, one icon per line; rustfmt would only wrap it.
 #[rustfmt::skip]
 mod icons;

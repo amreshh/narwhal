@@ -10,10 +10,10 @@ name: ci
 #                  sums up the results, with the Trivy, hadolint and zizmor
 #                  findings.
 #   push to main   the same checks, then the release: the image dev built
-#                  from the same code, rescanned and tagged with the next
-#                  version (see below) as :1.2.3, :1.2, :1 (built fresh only
-#                  when dev has none), a git tag v1.2.3 and a GitHub Release
-#                  with generated notes
+#                  from the same code with the next version (see below) set
+#                  in it (same layers, nothing rebuilt), rescanned and pushed
+#                  as :1.2.3, :1.2, :1 (built fresh only when dev has none),
+#                  a git tag v1.2.3 and a GitHub Release with generated notes
 #   tag v1.2.3     the same checks, then :1.2.3, :1.2, :1 (manual; the tag
 #                  must be on main). No major-only tag while on 0.x: 0.x
 #                  minors can break. A tag like v1.2.3-rc1 gets only that tag.
@@ -299,12 +299,27 @@ jobs:
             type=raw,value=code-${{ needs.plan.outputs.code }},enable=${{ github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main') }}
             type=ref,event=pr
 
+      # Which build this is, for the app's About dialog (NARWHAL_VERSION and
+      # NARWHAL_COMMIT in the Dockerfile): the version on main and for tags,
+      # none for dev and pull requests.
+      - name: Version
+        id: version
+        env:
+          NEXT: ${{ needs.plan.outputs.version }}
+        run: |
+          case "$GITHUB_REF" in
+            refs/tags/v*) version=${GITHUB_REF_NAME#v} ;;
+            *) version=$NEXT ;;
+          esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
       # main: release the image dev already built from the same code (every
       # file but the docs, which aren't in the image) instead of building
-      # it again. It's pulled by digest, scanned again below, and that same
-      # digest gets the release tags, so the release is exactly what was
-      # scanned. Without one (merged before dev's build finished, or a pull
-      # request from another branch), it's built as usual.
+      # it again. It's taken by digest, gets the release's version and commit
+      # as settings (.github/release/Dockerfile: the same layers, nothing
+      # recompiled), is scanned again below, and that is what's pushed with
+      # the release tags. Without one (merged before dev's build finished,
+      # or a pull request from another branch), it's built as usual.
       - name: Find dev's image of this code
         id: promote
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -320,13 +335,20 @@ jobs:
             echo "No image of this code from dev ($image:code-$CODE), building it"
           fi
 
-      - name: Pull dev's image
+      # The commit is main's, the one the release tag points at: the same
+      # code as the dev commit the image was built from.
+      - name: Set the version in dev's image
         if: steps.promote.outputs.source != ''
-        env:
-          SOURCE: ${{ steps.promote.outputs.source }}
-        run: |
-          docker pull "$SOURCE"
-          docker tag "$SOURCE" narwhal:scan
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .github/release
+          platforms: linux/amd64
+          build-args: |
+            IMAGE=${{ steps.promote.outputs.source }}
+            NARWHAL_COMMIT=${{ github.sha }}
+            NARWHAL_VERSION=${{ steps.version.outputs.version }}
+          load: true
+          tags: narwhal:scan
 
       # Built into the runner's Docker first, so it can be scanned before
       # anything is pushed.
@@ -336,6 +358,9 @@ jobs:
         with:
           context: .
           platforms: linux/amd64
+          build-args: |
+            NARWHAL_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}
+            NARWHAL_VERSION=${{ steps.version.outputs.version }}
           load: true
           tags: narwhal:scan
           cache-from: type=gha
@@ -367,24 +392,30 @@ jobs:
         with:
           context: .
           platforms: linux/amd64
+          build-args: |
+            NARWHAL_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}
+            NARWHAL_VERSION=${{ steps.version.outputs.version }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
 
-      # The release tags on dev's image, by digest: nothing is rebuilt. Its
-      # labels still name the dev commit it was built from.
-      - name: Tag dev's image as the release
+      # The same build of dev's image, pushed with the release tags and
+      # labels. Only its settings are new: the layers are already in the
+      # registry, so nothing else is uploaded.
+      - name: Push dev's image as the release
         if: steps.promote.outputs.source != ''
-        env:
-          SOURCE: ${{ steps.promote.outputs.source }}
-          TAGS: ${{ steps.meta.outputs.tags }}
-        run: |
-          args=()
-          while read -r tag; do
-            if [ -n "$tag" ]; then args+=(--tag "$tag"); fi
-          done <<< "$TAGS"
-          docker buildx imagetools create "${args[@]}" "$SOURCE"
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .github/release
+          platforms: linux/amd64
+          build-args: |
+            IMAGE=${{ steps.promote.outputs.source }}
+            NARWHAL_COMMIT=${{ github.sha }}
+            NARWHAL_VERSION=${{ steps.version.outputs.version }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
 
       # Everything this run checks passed, the image scan included: remember
       # this code, so a later run with only docs changes can skip it (see plan).

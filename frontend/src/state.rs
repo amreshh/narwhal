@@ -70,6 +70,7 @@ pub enum Dialog {
     ConfirmEmptyTrash,
     Properties(Entry),
     Shortcuts,
+    About,
 }
 
 /// One file of an upload.

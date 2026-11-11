@@ -476,9 +476,20 @@ pub fn child_on_path(folder: &str, current: &str) -> Option<String> {
     Some(format!("{prefix}{seg}"))
 }
 
+/// A git commit as short as the image tags write it: "5a4c8c6".
+pub fn short_commit(commit: &str) -> &str {
+    commit.get(..7).unwrap_or(commit)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::preview_text;
+    use super::{preview_text, short_commit};
+
+    #[test]
+    fn short_commits() {
+        assert_eq!(short_commit("5a4c8c62fabf680d364c62a07b984d17e38a3531"), "5a4c8c6");
+        assert_eq!(short_commit("5a4c"), "5a4c");
+    }
 
     #[test]
     fn text_in_common_encodings_is_previewed() {

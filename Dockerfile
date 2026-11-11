@@ -8,7 +8,7 @@
 #                with Trunk and the Axum server as a static (musl) binary
 #   4. runtime – empty (scratch) image with just the binary and static assets
 #
-#   docker build -t narwhal:latest .
+#   docker build -t narwhal:latest --build-arg NARWHAL_COMMIT="$(git rev-parse HEAD)" .
 #   docker run --rm -p 8080:8080 -v "$PWD/data:/data" narwhal:latest
 #
 # Base images are pinned by digest and written out in full (not through ARGs)
@@ -99,6 +99,15 @@ COPY --from=build --chown=65532:65532 /out/data /data
 ENV NARWHAL_ROOT=/data \
     NARWHAL_STATIC_DIR=/app/static \
     RUST_LOG=info,tower_http=info
+
+# Which build this is, for the app's About dialog: the git commit and, for a
+# release, its version (e.g. 1.2.3). Settings, not part of the binary, so a
+# new commit doesn't rebuild anything, and a release of an image that's
+# already built can set its version (see .github/release/Dockerfile).
+ARG NARWHAL_COMMIT=""
+ARG NARWHAL_VERSION=""
+ENV NARWHAL_COMMIT=${NARWHAL_COMMIT} \
+    NARWHAL_VERSION=${NARWHAL_VERSION}
 
 USER 65532:65532
 EXPOSE 8080
