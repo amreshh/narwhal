@@ -15,7 +15,7 @@
   </defs>
 
   <!-- Dark Terminal Background -->
-  <rect width="100" height="100" rx="10" fill="#11111b" />
+  <rect class="bg" width="100" height="100" rx="10" fill="#11111b" />
 
   <g filter="url(#glow)">
     <!-- Folder Base -->
