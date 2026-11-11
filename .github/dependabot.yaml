@@ -37,8 +37,7 @@ updates:
 
   # The Dockerfile's Rust builder image (the runtime is scratch), pinned by
   # digest: new Rust versions and rebuilt images with security fixes.
-  # No cooldown: those fixes shouldn't wait, and the ci workflow
-  # scans the image before pushing it.
+  # No cooldown: those fixes shouldn't wait.
   - package-ecosystem: docker # zizmor: ignore[dependabot-cooldown]
     directory: /
     target-branch: dev

@@ -5,35 +5,43 @@ name: ci
 #   push to dev    tests, then build ghcr.io/<repo>:<short-sha>, :latest and
 #                  :code-<fingerprint> (skipped when the code didn't change,
 #                  e.g. dev reset to main after a merge)
-#   pull request   tests, lint, security and fuzzing side by side, then build
-#                  and scan the image (nothing pushed). A comment on the PR
-#                  sums up the results, with the Trivy, hadolint and zizmor
-#                  findings.
-#   push to main   the same checks, then the release: the image dev built
-#                  from the same code with the next version (see below) set
-#                  in it (same layers, nothing rebuilt), rescanned and pushed
-#                  as :1.2.3, :1.2, :1 (built fresh only when dev has none),
-#                  a git tag v1.2.3 and a GitHub Release with generated notes
-#   tag v1.2.3     the same checks, then :1.2.3, :1.2, :1 (manual; the tag
-#                  must be on main). No major-only tag while on 0.x: 0.x
-#                  minors can break. A tag like v1.2.3-rc1 gets only that tag.
+#   pull request   tests, lint, security, fuzzing and dependency review side by
+#                  side, then build the image and smoke-test it (nothing
+#                  pushed). A comment on the PR sums up the results, with the
+#                  dependency review, hadolint and zizmor findings.
+#   push to main   the release, with no checks: the branch rules only merge a
+#                  pull request whose checks passed, up to date with main, so
+#                  main has exactly the files it checked. The release: the
+#                  image dev built from the same code with the next version
+#                  (see below) set in it (same layers, nothing rebuilt),
+#                  pushed as :1.2.3, :1.2, :1 (built fresh only when dev has
+#                  none), a git tag v1.2.3 and a GitHub Release with
+#                  generated notes
+#   tag v1.2.3     every check, then :1.2.3, :1.2, :1 (manual; the tag must be
+#                  on main). No major-only tag while on 0.x: 0.x minors can
+#                  break. A tag like v1.2.3-rc1 gets only that tag.
 #
 #   Changes to nothing but the docs (Markdown files and docs/) skip the tests,
 #   build and release once the rest has passed them. A pull request still runs
-#   the spell check and what code scanning needs (see plan).
+#   the quick checks, the spell check among them (see plan). Fuzzing only runs
+#   when the document readers, their dependencies or the fuzzing changed.
 #
-#   plan ─┬─ test ─────┐
-#         ├─ lint ─────┤               ┌─ release (main)
-#         ├─ security ─┼─── build ─────┤
-#         └─ fuzz ─────┘               └─ report (pull requests)
+#   plan ─┬─ test ─────────┐
+#         ├─ lint ─────────┤               ┌─ release (main)
+#         ├─ security ─────┼─── build ─────┤
+#         ├─ fuzz ─────────┤               └─ report (pull requests)
+#         └─ dependencies ─┘
 #
 # lint, security and fuzz are in their own files and called from here;
-# security and fuzz also run weekly on their own. The image is scanned with
-# Trivy (.github/actions/scan-image): every vulnerability in the run summary,
-# and builds fail on HIGH or CRITICAL ones that have a fix, unless bypassed
-# in .trivyignore.yaml. Reports from Trivy, zizmor and hadolint go to
-# Security → Code scanning; image-scan.yaml rescans the latest release daily.
-# `checks` sums up the checks for branch rules.
+# security and fuzz also run weekly on their own. CodeQL is a workflow of its
+# own (codeql.yaml), which also runs on main. dependencies runs GitHub's
+# dependency review on pull requests: they fail when they add or change a
+# dependency to a version with a known HIGH or CRITICAL vulnerability
+# (settings and bypasses in .github/dependency-review.yaml). Vulnerabilities
+# found later in released dependencies come from Dependabot alerts, which
+# open the fixes as pull requests. hadolint and zizmor fail the checks on any
+# finding, and their findings are tables in the run summary and the pull
+# request comment. `checks` sums up the checks for branch rules.
 #
 # Version on main: bumps the patch of the latest vX.Y.Z tag. Put "#minor" or
 # "#major" in a commit message (e.g. the merge commit) to bump that instead.
@@ -62,10 +70,12 @@ jobs:
   #   but the docs) already passed them: the build job remembers each code
   #   version that passed, in the Actions cache. This also skips dev after
   #   it's reset to main. Pull requests skip only the slow ones (tests,
-  #   rustfmt, clippy, fuzzing): the branch rules want code scanning results
-  #   (Hadolint, zizmor, Trivy) for every new commit, so those run, and the
-  #   spell check covers the docs.
-  # - main releases only when more than the docs changed since the last release.
+  #   rustfmt, clippy, fuzzing): the rest is quick, and the spell check
+  #   covers the docs. Dependency review always runs.
+  # - main runs no checks (its pull request did) and releases only when more
+  #   than the docs changed since the last release.
+  # - Fuzzing only runs when a pull request changes the document readers
+  #   (READERS).
   # Manual runs and tags always run everything.
   plan:
     runs-on: ubuntu-24.04
@@ -77,9 +87,13 @@ jobs:
       key: ${{ steps.code.outputs.key }}
       code: ${{ steps.code.outputs.code }}
       tested: ${{ steps.tested.outputs.cache-hit }}
+      fuzz: ${{ steps.readers.outputs.fuzz }}
     env:
       # git pathspecs, separated by spaces
       DOCS: ":(exclude)*.md :(exclude)docs/"
+      # What the fuzzing covers: the readers, what they're built with, and the
+      # fuzzing itself.
+      READERS: "office/ fuzz/ Cargo.toml Cargo.lock .github/workflows/fuzz.yaml"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -149,11 +163,31 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "previous=$last" >> "$GITHUB_OUTPUT"
 
-  # Every run except code that already passed, or main with nothing to release.
+      # The fuzz job feeds documents to the readers in office/, so it can only
+      # find something new when READERS changed.
+      - name: Did the document readers change?
+        id: readers
+        run: |
+          read -ra readers <<< "$READERS"
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            # Manual runs and tags. (Pushes to dev and main don't fuzz.)
+            echo "fuzz=true" >> "$GITHUB_OUTPUT"
+          # GitHub's test merge commit: its first parent is the base branch.
+          elif git diff --quiet HEAD^1 HEAD -- "${readers[@]}"; then
+            echo "The document readers didn't change: no fuzzing"
+            echo "fuzz=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "The document readers changed: fuzzing"
+            echo "fuzz=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # Every run except code that already passed, pushes to main (their pull
+  # request ran the tests), and manual runs on main with nothing to release.
   test:
     needs: plan
     if: >-
       !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.tested != 'true' &&
+      !(github.event_name == 'push' && github.ref == 'refs/heads/main') &&
       (github.ref != 'refs/heads/main' || needs.plan.outputs.version != '')
     runs-on: ubuntu-24.04
     permissions:
@@ -176,41 +210,43 @@ jobs:
       - name: Tests
         run: cargo test --locked -p narwhal-server -p narwhal-shared -p narwhal-office -p narwhal-frontend
 
-  # lint, security and fuzz: pull requests, main and tags, not dev pushes
-  # (dev gets the quick tests + build; the pull request runs everything).
+  # lint, security and fuzz: pull requests, tags and manual runs. Not pushes
+  # to dev (which get the quick tests + build) or to main (whose pull request
+  # ran everything).
 
   # Formatting and lints (lint.yaml). Without rustfmt and clippy when the code already passed.
   lint:
     needs: plan
     if: >-
       !cancelled() && needs.plan.result == 'success' &&
-      !(github.event_name == 'push' && github.ref == 'refs/heads/dev') &&
+      !(github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main')) &&
       (github.ref != 'refs/heads/main' || needs.plan.outputs.version != '')
     uses: $/.github/workflows/lint.yaml
     with:
       code-passed: ${{ needs.plan.outputs.tested == 'true' }}
     permissions:
       contents: read
-      security-events: write # hadolint's report
 
   # zizmor on the workflows (security.yaml).
   security:
     needs: plan
     if: >-
       !cancelled() && needs.plan.result == 'success' &&
-      !(github.event_name == 'push' && github.ref == 'refs/heads/dev') &&
+      !(github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main')) &&
       (github.ref != 'refs/heads/main' || needs.plan.outputs.version != '')
     uses: $/.github/workflows/security.yaml
     permissions:
       contents: read
       security-events: write # zizmor's report
 
-  # A short fuzzing run of the document readers (fuzz.yaml); the weekly one is longer.
+  # A short fuzzing run of the document readers (fuzz.yaml), when they changed
+  # (see plan); the weekly one is longer and always runs.
   fuzz:
     needs: plan
     if: >-
       !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.tested != 'true' &&
-      !(github.event_name == 'push' && github.ref == 'refs/heads/dev') &&
+      needs.plan.outputs.fuzz == 'true' &&
+      !(github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main')) &&
       (github.ref != 'refs/heads/main' || needs.plan.outputs.version != '')
     uses: $/.github/workflows/fuzz.yaml
     with:
@@ -218,11 +254,58 @@ jobs:
     permissions:
       contents: read
 
+  # Pull requests: GitHub's dependency review fails when one adds a dependency
+  # (a crate, or an action the workflows use), or changes one to a version,
+  # with a known HIGH or CRITICAL vulnerability (settings and bypasses in
+  # .github/dependency-review.yaml). Released dependencies are watched by
+  # Dependabot alerts instead, which open the fixes as pull requests. Runs on
+  # every pull request, also when the code already passed: new
+  # vulnerabilities are published every day.
+  dependencies:
+    needs: plan
+    if: >-
+      !cancelled() && needs.plan.result == 'success' &&
+      github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      # For the settings file.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Dependency review
+        id: review
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          config-file: ./.github/dependency-review.yaml
+
+      # Its summary, for the pull request comment, with a heading the size of
+      # the other tables' there.
+      - name: Keep the summary
+        if: ${{ !cancelled() }}
+        env:
+          SUMMARY: ${{ steps.review.outputs.comment-content }}
+        run: |
+          if [ -n "$SUMMARY" ]; then
+            printf '%s\n' "${SUMMARY/<h1>Dependency Review<\/h1>/<h2>Dependency review</h2>}" \
+              > "$RUNNER_TEMP/dependency-review-summary.md"
+          fi
+
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: scan-summary-dependency-review
+          path: ${{ runner.temp }}/dependency-review-summary.md
+          if-no-files-found: ignore
+          retention-days: 7
+
   # The one check to require in branch rules: fails when any check failed or
   # was cancelled. (A skipped job counts as passed, so requiring build alone
   # would let a failed lint through: build is then skipped.)
   checks:
-    needs: [plan, test, lint, security, fuzz]
+    needs: [plan, test, lint, security, fuzz, dependencies]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     permissions: {}
@@ -231,34 +314,30 @@ jobs:
         env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
-          echo "plan, test, lint, security, fuzz: $RESULTS"
+          echo "plan, test, lint, security, fuzz, dependencies: $RESULTS"
           case " $RESULTS " in
             *" failure "* | *" cancelled "*) exit 1 ;;
           esac
 
   # Runs when the tests passed and no other check failed (lint, security and
-  # fuzz are skipped on dev pushes). Also on a pull request whose code already
-  # passed: code scanning needs Trivy's results for every new commit, and the
-  # image comes straight from the layer cache (the docs aren't in it).
+  # fuzz are skipped on dev pushes), and on pushes to main with something to
+  # release, where nothing runs before it: its pull request passed the checks.
   build:
-    needs: [plan, test, lint, security, fuzz]
+    needs: [plan, test, lint, security, fuzz, dependencies]
     if: >-
       !cancelled() &&
       (needs.test.result == 'success' ||
-        (github.event_name == 'pull_request' && needs.plan.outputs.tested == 'true')) &&
+        (github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.plan.outputs.version != '')) &&
       !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
     runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
-      security-events: write # the image scan's report
     steps:
-      # Pull requests: the head commit, not GitHub's test merge commit, so Trivy's
-      # report is uploaded for the head commit (upload-sarif uses the commit
-      # that's checked out). GitHub can rebuild the merge commit at any time,
-      # and code scanning then blocks the merge until it has results for the
-      # new one. The branch rules keep pull requests up to date with main, so
-      # both have the same files. (Empty on other events: the default.)
+      # Pull requests: the head commit (the one NARWHAL_COMMIT names), not
+      # GitHub's test merge commit. The branch rules keep pull requests up to
+      # date with main, so both have the same files. (Empty on other events:
+      # the default.)
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -330,11 +409,11 @@ jobs:
 
       # main: release the image dev already built from the same code (every
       # file but the docs, which aren't in the image) instead of building
-      # it again. It's taken by digest, gets the release's version and commit
-      # as settings (.github/release/Dockerfile: the same layers, nothing
-      # recompiled), is scanned again below, and that is what's pushed with
-      # the release tags. Without one (merged before dev's build finished,
-      # or a pull request from another branch), it's built as usual.
+      # it again. It's taken by digest and gets the release's version and
+      # commit as settings (.github/release/Dockerfile: the same layers,
+      # nothing recompiled). Without one (merged before dev's build
+      # finished, or a pull request from another branch), it's built as
+      # usual.
       - name: Find dev's image of this code
         id: promote
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -350,75 +429,65 @@ jobs:
             echo "No image of this code from dev ($image:code-$CODE), building it"
           fi
 
-      # The commit is main's, the one the release tag points at: the same
-      # code as the dev commit the image was built from.
-      - name: Set the version in dev's image
-        if: steps.promote.outputs.source != ''
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .github/release
-          platforms: linux/amd64
-          build-args: |
-            IMAGE=${{ steps.promote.outputs.source }}
-            NARWHAL_COMMIT=${{ github.sha }}
-            NARWHAL_VERSION=${{ steps.version.outputs.version }}
-          load: true
-          tags: narwhal:scan
-
-      # Built into the runner's Docker first, so it can be scanned before
-      # anything is pushed.
+      # Pull requests: built to check that it builds and works (below);
+      # nothing is pushed.
       - name: Build
-        if: steps.promote.outputs.source == ''
+        if: github.event_name == 'pull_request'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           platforms: linux/amd64
           build-args: |
-            NARWHAL_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}
+            NARWHAL_COMMIT=${{ github.event.pull_request.head.sha }}
             NARWHAL_VERSION=${{ steps.version.outputs.version }}
           load: true
-          tags: narwhal:scan
+          tags: narwhal:pr
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Table in the run summary, report to code scanning, and a failure on
-      # HIGH or CRITICAL vulnerabilities that have a fix (.github/actions/scan-image).
-      # Every run scans the same name, so GitHub can match a pull request's
-      # findings with main's.
-      - name: Scan image
-        uses: $/.github/actions/scan-image
-        with:
-          image: narwhal:scan
+      # Pull requests: start the image and check that it answers, so an image
+      # that doesn't work can't be merged, and so released: main releases
+      # images built from exactly the files a pull request checked. (Not on
+      # dev pushes: dev is work in progress.) The last "Checking" line shows
+      # which check failed, above the container's log.
+      - name: Smoke test
+        if: github.event_name == 'pull_request'
+        env:
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          docker run --detach --name smoke --publish 127.0.0.1:8080:8080 narwhal:pr > /dev/null
+          trap 'echo "--- The container log:"; docker logs smoke; docker rm --force smoke > /dev/null' EXIT
+          url=http://127.0.0.1:8080
+          echo "Checking /healthz (retried while the server starts)"
+          curl -fsS --retry 10 --retry-delay 1 --retry-all-errors "$url/healthz" > /dev/null
+          echo "Checking that / is the app's page"
+          grep -q '<title>Narwhal</title>' <<< "$(curl -fsS "$url/")"
+          echo "Checking /api/info (it reads /data) names this commit"
+          jq -e --arg sha "$SHA" '.commit == $sha' <<< "$(curl -fsS "$url/api/info")" > /dev/null
+          echo "Checking the image's own health check (narwhal healthcheck)"
+          docker exec smoke /app/narwhal healthcheck
+          echo "All checks passed"
 
-      # The scan table, for the pull request comment.
-      - name: Keep the scan table
-        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: scan-summary-trivy
-          path: trivy-summary.md
-          if-no-files-found: ignore
-          retention-days: 7
-
-      # Same build, all layers from the cache.
-      - name: Push
+      - name: Build and push
         if: github.event_name != 'pull_request' && steps.promote.outputs.source == ''
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           platforms: linux/amd64
           build-args: |
-            NARWHAL_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}
+            NARWHAL_COMMIT=${{ github.sha }}
             NARWHAL_VERSION=${{ steps.version.outputs.version }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
           cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      # The same build of dev's image, pushed with the release tags and
-      # labels. Only its settings are new: the layers are already in the
-      # registry, so nothing else is uploaded.
+      # dev's image with the release tags and labels, and main's commit: the
+      # one the release tag points at, with the same code as the dev commit
+      # the image was built from. Only its settings are new: the layers are
+      # already in the registry, so nothing else is uploaded.
       - name: Push dev's image as the release
         if: steps.promote.outputs.source != ''
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -434,16 +503,14 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
 
-      # Everything this run checks passed, the image scan included: remember
-      # this code, so a later run with only docs changes can skip it (see plan).
+      # Everything this run checks passed: remember this code, so a later run
+      # with only docs changes can skip it (see plan).
       - name: Mark this code as passed
-        if: needs.plan.outputs.tested != 'true'
         env:
           KEY: ${{ needs.plan.outputs.key }}
         run: echo "$KEY" > .ci-passed
 
-      - if: needs.plan.outputs.tested != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .ci-passed
           key: ${{ needs.plan.outputs.key }}
@@ -493,13 +560,13 @@ jobs:
             --title "$VERSION" \
             --generate-notes "${notes[@]}"
 
-  # Pull requests: one comment with the results and the scan tables (Trivy,
-  # hadolint, zizmor), updated on every run. (Pull requests from forks get a
-  # read-only token: no comment.)
+  # Pull requests: one comment with the results and the scan tables
+  # (dependency review, hadolint, zizmor), updated on every run. (Pull
+  # requests from forks get a read-only token: no comment.)
   # When the code already passed (only the docs changed), the comment keeps
   # that run's results.
   report:
-    needs: [plan, test, lint, security, fuzz, build]
+    needs: [plan, test, lint, security, fuzz, dependencies, build]
     if: >-
       !cancelled() && github.event_name == 'pull_request' && !github.event.pull_request.head.repo.fork &&
       needs.plan.outputs.tested != 'true'
@@ -507,7 +574,8 @@ jobs:
     permissions:
       pull-requests: write # the comment
     steps:
-      # The scan tables: Trivy (build), hadolint (lint) and zizmor (security).
+      # The scan tables: dependency review (dependencies), hadolint (lint) and
+      # zizmor (security).
       # One is missing when its job didn't get that far.
       - name: Get the scan tables
         continue-on-error: true
@@ -525,6 +593,8 @@ jobs:
           LINT: ${{ needs.lint.result }}
           SECURITY: ${{ needs.security.result }}
           FUZZ: ${{ needs.fuzz.result }}
+          READERS_CHANGED: ${{ needs.plan.outputs.fuzz }}
+          DEPENDENCIES: ${{ needs.dependencies.result }}
           BUILD: ${{ needs.build.result }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -537,6 +607,10 @@ jobs:
               *) echo "$1" ;;
             esac
           }
+          fuzz=$(icon "$FUZZ")
+          if [ "$FUZZ" = skipped ] && [ "$READERS_CHANGED" = false ]; then
+            fuzz="⏭️ not needed: the document readers didn't change"
+          fi
           marker="<!-- narwhal-ci-report -->"
           {
             echo "$marker"
@@ -547,10 +621,11 @@ jobs:
             echo "| Tests | $(icon "$TEST") |"
             echo "| Lint: rustfmt, leptosfmt, clippy, typos, actionlint, hadolint, kubeconform | $(icon "$LINT") |"
             echo "| Security: zizmor | $(icon "$SECURITY") |"
-            echo "| Fuzzing | $(icon "$FUZZ") |"
-            echo "| Image build and scan | $(icon "$BUILD") |"
+            echo "| Dependency review | $(icon "$DEPENDENCIES") |"
+            echo "| Fuzzing | $fuzz |"
+            echo "| Image build and smoke test | $(icon "$BUILD") |"
             echo
-            for scan in trivy hadolint zizmor; do
+            for scan in dependency-review hadolint zizmor; do
               if [ -f "$scan-summary.md" ]; then
                 cat "$scan-summary.md"
                 echo

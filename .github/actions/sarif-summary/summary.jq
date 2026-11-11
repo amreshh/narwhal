@@ -8,7 +8,7 @@ def cell: tostring | gsub("[\r\n]+"; " ") | gsub("\\|"; "\\|") | gsub("<"; "&lt;
 def levels: ["error", "warning", "note", "none"];
 def icon: {error: "❌", warning: "⚠️", note: "ℹ️"}[.] // "";
 
-# The table stops here (most severe first); code scanning has them all.
+# The table stops here (most severe first); the job's log has them all.
 def max_rows: 50;
 
 # Rules without a link in the report: hadolint's own (DL…) and ShellCheck's (SC…).
@@ -45,5 +45,5 @@ def help($rules):
       | (if .file == "" then "" elif .line then "[\(.file | cell):\(.line)](\($blob)/\(.file)#L\(.line))" else "[\(.file | cell)](\($blob)/\(.file))" end) as $where
       # No code spans: they'd show the escaped < and > as &lt; and &gt;.
       | "| \(.level | icon) \(.level) | \($rule) | \($where) | \(.message | gsub("`"; "") | cell) |"),
-    (if ($all | length) > max_rows then "", "…and \(($all | length) - max_rows) more: see code scanning." else empty end)
+    (if ($all | length) > max_rows then "", "…and \(($all | length) - max_rows) more: see the job's log." else empty end)
   end

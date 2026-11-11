@@ -1,0 +1,53 @@
+name: codeql
+
+# CodeQL code scanning, as the "advanced setup": this workflow instead of
+# GitHub's default setup, which has to be off for it to upload (repository
+# settings → Advanced Security). It does what the default setup did: the
+# Rust code and the GitHub Actions workflows, with the default queries, on
+# pull requests to main, pushes to main and weekly. Results go to Security →
+# Code scanning and show on the pull request.
+#
+# The branch rules want CodeQL's results for both the pull request and main,
+# so this runs on pushes to main even though ci doesn't check main again.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "29 2 * * 1" # Mondays, 02:29 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# No token permissions unless a job asks for them.
+permissions: {}
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write # upload the results
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [rust, actions]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Neither language needs a build: CodeQL reads the source.
+      - uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+
+      # The default setup's category, so the alerts it found carry over.
+      - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          category: /language:${{ matrix.language }}

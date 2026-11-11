@@ -9,12 +9,13 @@ release, see "Version on main" at the top of .github/workflows/ci.yaml.
 
 ## Testing
 
-<!-- What you checked beyond CI (which runs the tests, lint, security, fuzzing
-and the image build and scan): commands, what you tried in the app. -->
+<!-- What you checked beyond CI (which runs the tests, lint, security, fuzzing,
+dependency review, and builds and starts the image): commands, what you tried
+in the app. -->
 
 ## Checklist
 
 - [ ] README and comments match the new behaviour
-- [ ] Dockerfile changes: the image runs (`docker run`, then the app and `/healthz`)
+- [ ] Dockerfile changes: the app works in a browser from the image (CI only checks that it starts and answers)
 - [ ] deploy/ changes: `kubectl kustomize deploy` renders
-- [ ] Bypasses added to `.trivyignore.yaml` have a statement and an expiry date
+- [ ] Bypasses added to `.github/dependency-review.yaml` say why, and when to look at them again

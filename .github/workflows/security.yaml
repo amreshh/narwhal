@@ -1,12 +1,18 @@
 name: security
 
 # zizmor: security problems in the GitHub Actions workflows. Called by the ci
-# workflow; also runs weekly, so newly reported problems with the actions in
-# use show up even when nothing changes here.
+# workflow on pull requests, where any finding fails the checks; also runs
+# weekly, so newly reported problems with the actions in use show up even
+# when nothing changes here.
 #
-# CodeQL runs through GitHub's default setup (repository settings → Advanced
-# Security), not here: a CodeQL workflow can't upload while that's on. The
-# container image is scanned in the ci workflow, before it's pushed.
+# Its report also goes to Security → Code scanning: zizmor-action writes the
+# SARIF that the table below is made from only when it uploads it too. The
+# branch rules don't require it (the failing step below already blocks the
+# merge), and the weekly run keeps main's results there current.
+#
+# CodeQL has a workflow of its own, codeql.yaml.
+# Dependencies are checked by the ci workflow's dependency review (pull
+# requests) and by Dependabot alerts (what's released).
 on:
   workflow_call:
   schedule:
@@ -25,16 +31,14 @@ jobs:
     steps:
       # Pull requests: the head commit, not GitHub's test merge commit, so the
       # report is uploaded for the head commit (upload-sarif uses the commit
-      # that's checked out). GitHub can rebuild the merge commit at any time,
-      # and code scanning then blocks the merge until it has results for the
-      # new one. (Empty on other events: the default.)
+      # that's checked out). (Empty on other events: the default.)
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      # SARIF to Security → Code scanning. zizmor never fails in this mode,
-      # so the next step does the checking.
+      # SARIF, for the table, also uploaded to code scanning. zizmor never
+      # fails in this mode, so the last step does the checking.
       - name: zizmor report
         id: report
         if: ${{ !github.event.pull_request.head.repo.fork }} # forks get a read-only token
