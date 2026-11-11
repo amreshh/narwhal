@@ -12,7 +12,7 @@ security:
 
 image:
   - changed-files:
-      - any-glob-to-any-file: [Dockerfile, .dockerignore]
+      - any-glob-to-any-file: [Dockerfile, .dockerignore, .github/release/**]
 
 server:
   - changed-files:

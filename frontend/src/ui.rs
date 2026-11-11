@@ -466,6 +466,7 @@ fn HamburgerMenu() -> impl IntoView {
             {mi(st, "Refresh", "F5", icons::REFRESH, move || st.refresh_all())}
             <div class="msep"></div>
             {mi(st, "Keyboard Shortcuts", "F1", icons::KEYBOARD, move || st.dialog.set(Some(Dialog::Shortcuts)))}
+            {mi(st, "About Narwhal", "", icons::INFO, move || st.dialog.set(Some(Dialog::About)))}
         </div>
     }
 }
@@ -1431,6 +1432,7 @@ fn DialogHost() -> impl IntoView {
                 }
                 Dialog::Properties(entry) => view! { <PropertiesDialog entry=entry /> }.into_any(),
                 Dialog::Shortcuts => view! { <ShortcutsDialog /> }.into_any(),
+                Dialog::About => view! { <AboutDialog /> }.into_any(),
             };
             view! {
                 <div
@@ -1643,6 +1645,37 @@ fn ShortcutsDialog() -> impl IntoView {
                     })
                     .collect_view()}
             </table>
+            <div class="buttons">
+                <button class="btn primary" on:click=move |_| st.dialog.set(None)>
+                    "Close"
+                </button>
+            </div>
+        </div>
+    }
+}
+
+/// Which build this is: the release version, and the commit it was built from.
+#[component]
+fn AboutDialog() -> impl IntoView {
+    let st = use_st();
+    let version = move || {
+        st.info.with(|i| i.as_ref().and_then(|i| i.version.clone())).unwrap_or_else(|| "Development build".into())
+    };
+    let commit = move || st.info.with(|i| i.as_ref().and_then(|i| i.commit.clone()));
+    view! {
+        <div class="dialog props" role="dialog" aria-label="About Narwhal">
+            <div class="props-head">
+                <span class="bigicon" inner_html=include_str!("../favicon.svg")></span>
+                <h2>"Narwhal"</h2>
+            </div>
+            <dl>
+                <dt>"Version"</dt>
+                <dd>{version}</dd>
+                <dt>"Commit"</dt>
+                <dd class="mono" title=move || commit().unwrap_or_default()>
+                    {move || commit().map(|c| util::short_commit(&c).to_string()).unwrap_or_else(|| "Unknown".into())}
+                </dd>
+            </dl>
             <div class="buttons">
                 <button class="btn primary" on:click=move |_| st.dialog.set(None)>
                     "Close"

@@ -53,6 +53,9 @@ struct Config {
     allowed_hosts: Vec<String>,
     /// Content-Security-Policy for the app's pages.
     app_csp: HeaderValue,
+    /// The release version and git commit, from the image (see the Dockerfile).
+    version: Option<String>,
+    commit: Option<String>,
 }
 
 type AppState = Arc<Config>;
@@ -176,6 +179,8 @@ async fn serve() {
             })
             .unwrap_or_default(),
         app_csp: app_csp(&static_dir),
+        version: env("NARWHAL_VERSION"),
+        commit: env("NARWHAL_COMMIT"),
     });
 
     let listener = listen(bind).unwrap_or_else(|e| fail(format!("cannot listen on {bind}: {e}")));
@@ -183,6 +188,8 @@ async fn serve() {
     let stack = if local.starts_with('[') { "IPv4 + IPv6" } else { "IPv4 only" };
 
     tracing::info!(
+        version = cfg.version.as_deref().unwrap_or("none"),
+        commit = cfg.commit.as_deref().unwrap_or("unknown"),
         root = %cfg.root.path().display(),
         static_dir = %static_dir.display(),
         read_only = cfg.read_only,
@@ -527,6 +534,8 @@ async fn info(State(cfg): State<AppState>) -> ApiResult<Json<Info>> {
             trash: trash_enabled(&cfg),
             trash_items: if trash_enabled(&cfg) { trash::count(&cfg.root) } else { 0 },
             upload_parallel: cfg.upload_parallel,
+            version: cfg.version.clone(),
+            commit: cfg.commit.clone(),
         })
     })
     .await

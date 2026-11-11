@@ -113,9 +113,9 @@ Every push and pull request runs one pipeline, `ci`:
   then the image build and scan (nothing pushed); a comment on the PR sums up the results,
   with tables of the Trivy, hadolint and zizmor findings
 - **push to `main`**: the same checks, then the release: the image `dev` already built
-  from the same code is rescanned and tagged with the new version (built fresh only when
-  there's none), plus a git tag and a GitHub Release whose notes list the merged commits
-  by area
+  from the same code gets the new version set in it (the same layers, nothing rebuilt),
+  is rescanned and pushed with the version's tags (built fresh only when there's none),
+  plus a git tag and a GitHub Release whose notes list the merged commits by area
 
 Changes to only the docs (Markdown files and `docs/`) skip the tests, build and
 release once the rest of the code has passed them. A pull request still runs the
@@ -197,6 +197,10 @@ With a ReadWriteOnce volume keep `replicas: 1` (strategy `Recreate`).
 | `NARWHAL_ALLOWED_HOSTS` | *(empty)* | Comma-separated host names the server answers to, e.g. `files.example.com,localhost`. Other hosts get 403 (blocks DNS rebinding). Empty = any. `/healthz` is always allowed. |
 | `NARWHAL_BIND` | `[::]:8080` | Listen address. The default accepts IPv4 and IPv6 (falls back to IPv4 if IPv6 is disabled); `0.0.0.0:8080` forces IPv4 only. |
 | `RUST_LOG` | `info,tower_http=info` | Log filter. |
+
+The image also sets `NARWHAL_VERSION` (releases only, e.g. `1.2.3`) and
+`NARWHAL_COMMIT`, the git commit it was built from. The menu's **About Narwhal**
+shows both; a build without them is a development build.
 
 ## Security notes
 

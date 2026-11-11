@@ -71,6 +71,12 @@ pub struct Info {
     /// Default number of files uploaded at the same time.
     #[serde(default)]
     pub upload_parallel: u32,
+    /// The release this server is (e.g. `1.2.3`); none for other builds.
+    #[serde(default)]
+    pub version: Option<String>,
+    /// The git commit it was built from, in full.
+    #[serde(default)]
+    pub commit: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
