@@ -1,7 +1,7 @@
 # The release of an image that's already built (ci.yaml, on main: the image
-# dev built from the same code), with the release's version and commit set
-# for the app's About dialog. Only settings change: no new layers, nothing is
-# rebuilt.
+# its pull request built and smoke-tested), with the release's version and
+# commit set for the app's About dialog. Only settings change: no new layers,
+# nothing is rebuilt.
 #
 #   docker build --build-arg IMAGE=ghcr.io/owner/narwhal@sha256:… \
 #     --build-arg NARWHAL_VERSION=1.2.3 --build-arg NARWHAL_COMMIT=… .github/release

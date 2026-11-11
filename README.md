@@ -108,17 +108,18 @@ Fuzzing the document readers (needs nightly Rust and `cargo install cargo-fuzz`)
 
 Every push and pull request runs one pipeline, `ci`:
 
-- **push to `dev`**: the tests, then the image build (`:latest`)
+- **push to `dev`**: the tests, then the image build (`:latest`, to try out)
 - **pull request**: the tests, `lint`, `security`, a short `fuzz` run (when the document
   readers changed) and GitHub's dependency review side by side, then the image build and
-  a smoke test that starts it and checks `/healthz`, the app's page and the API (nothing
-  pushed); a comment on the PR sums up the results, with the dependency review, hadolint
-  and zizmor findings and the smoke test's checks
+  a smoke test that starts it and checks `/healthz`, the app's page and the API. Once it
+  passes, the image is pushed for the release (not from forks). A comment on the PR sums
+  up the results, with the dependency review, hadolint and zizmor findings and the smoke
+  test's checks
 - **push to `main`**: the release, with no checks: the branch rules only merge a pull
-  request whose checks passed, up to date with `main`. The image `dev` already built
-  from the same code gets the new version set in it (the same layers, nothing rebuilt)
-  and is pushed with the version's tags (built fresh only when there's none),
-  plus a git tag and a GitHub Release whose notes list the merged commits by area
+  request whose checks passed, up to date with `main`. The image the pull request
+  tested gets the new version set in it (the same layers, nothing rebuilt) and is
+  pushed with the version's tags (built fresh only when there's none), plus a git tag
+  and a GitHub Release whose notes list the merged commits by area
 - **tag `v1.2.3`**: every check, then the image with that version (a manual release)
 
 Changes to only the docs (Markdown files and `docs/`) skip the tests, build and
