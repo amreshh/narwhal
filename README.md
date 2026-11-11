@@ -113,7 +113,7 @@ Every push and pull request runs one pipeline, `ci`:
   readers changed) and GitHub's dependency review side by side, then the image build and
   a smoke test that starts it and checks `/healthz`, the app's page and the API (nothing
   pushed); a comment on the PR sums up the results, with the dependency review, hadolint
-  and zizmor findings
+  and zizmor findings and the smoke test's checks
 - **push to `main`**: the release, with no checks: the branch rules only merge a pull
   request whose checks passed, up to date with `main`. The image `dev` already built
   from the same code gets the new version set in it (the same layers, nothing rebuilt)

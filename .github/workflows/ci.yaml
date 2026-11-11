@@ -8,7 +8,8 @@ name: ci
 #   pull request   tests, lint, security, fuzzing and dependency review side by
 #                  side, then build the image and smoke-test it (nothing
 #                  pushed). A comment on the PR sums up the results, with the
-#                  dependency review, hadolint and zizmor findings.
+#                  dependency review, hadolint and zizmor findings and the
+#                  smoke test's checks.
 #   push to main   the release, with no checks: the branch rules only merge a
 #                  pull request whose checks passed, up to date with main, so
 #                  main has exactly the files it checked. The release: the
@@ -448,25 +449,71 @@ jobs:
       # Pull requests: start the image and check that it answers, so an image
       # that doesn't work can't be merged, and so released: main releases
       # images built from exactly the files a pull request checked. (Not on
-      # dev pushes: dev is work in progress.) The last "Checking" line shows
-      # which check failed, above the container's log.
+      # dev pushes: dev is work in progress.) The results are a table in the
+      # run summary and the pull request comment; when a check fails, the
+      # container's log follows in the job log.
       - name: Smoke test
         if: github.event_name == 'pull_request'
         env:
           SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           docker run --detach --name smoke --publish 127.0.0.1:8080:8080 narwhal:pr > /dev/null
-          trap 'echo "--- The container log:"; docker logs smoke; docker rm --force smoke > /dev/null' EXIT
+          trap 'docker rm --force smoke > /dev/null' EXIT
           url=http://127.0.0.1:8080
-          echo "Checking /healthz (retried while the server starts)"
-          curl -fsS --retry 10 --retry-delay 1 --retry-all-errors "$url/healthz" > /dev/null
-          echo "Checking that / is the app's page"
-          grep -q '<title>Narwhal</title>' <<< "$(curl -fsS "$url/")"
-          echo "Checking /api/info (it reads /data) names this commit"
-          jq -e --arg sha "$SHA" '.commit == $sha' <<< "$(curl -fsS "$url/api/info")" > /dev/null
-          echo "Checking the image's own health check (narwhal healthcheck)"
-          docker exec smoke /app/narwhal healthcheck
-          echo "All checks passed"
+
+          # Each check is a function; after the first failure the rest don't run.
+          rows=()
+          failed=""
+          check() { # <what it checks> <function>
+            if [ -n "$failed" ]; then
+              rows+=("| $1 | ⏭️ not run |")
+            elif "$2"; then
+              rows+=("| $1 | ✅ |")
+            else
+              rows+=("| $1 | ❌ failed |")
+              failed=$1
+            fi
+          }
+          # Retried while the server starts.
+          healthz() { curl -fsS --retry 10 --retry-delay 1 --retry-all-errors "$url/healthz" > /dev/null; }
+          page() { grep -q '<title>Narwhal</title>' <<< "$(curl -fsS "$url/")"; }
+          # It reads /data, and reports the commit the image was built from.
+          info() { jq -e --arg sha "$SHA" '.commit == $sha' <<< "$(curl -fsS "$url/api/info")" > /dev/null; }
+          # The image's HEALTHCHECK.
+          healthcheck() { docker exec smoke /app/narwhal healthcheck; }
+
+          check "It starts, and \`/healthz\` answers" healthz
+          check "\`/\` is the app's page" page
+          check "\`/api/info\` answers, for this commit (${SHA:0:7})" info
+          check "The image's own health check (\`narwhal healthcheck\`)" healthcheck
+
+          size=$(docker image inspect narwhal:pr --format '{{.Size}}')
+          mb=$(awk -v b="$size" 'BEGIN { printf "%.1f", b / 1e6 }')
+          {
+            echo "## Smoke test"
+            echo
+            echo "This pull request's image ($mb MB), started and checked."
+            echo
+            echo "| Check | Result |"
+            echo "| --- | --- |"
+            printf '%s\n' "${rows[@]}"
+          } > "$RUNNER_TEMP/smoke-summary.md"
+          tee -a "$GITHUB_STEP_SUMMARY" < "$RUNNER_TEMP/smoke-summary.md"
+          if [ -n "$failed" ]; then
+            echo "::error::Smoke test failed: $failed"
+            echo "--- The container's log:"
+            docker logs smoke
+            exit 1
+          fi
+
+      # The table, for the pull request comment.
+      - if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: scan-summary-smoke
+          path: ${{ runner.temp }}/smoke-summary.md
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Build and push
         if: github.event_name != 'pull_request' && steps.promote.outputs.source == ''
@@ -560,8 +607,8 @@ jobs:
             --title "$VERSION" \
             --generate-notes "${notes[@]}"
 
-  # Pull requests: one comment with the results and the scan tables
-  # (dependency review, hadolint, zizmor), updated on every run. (Pull
+  # Pull requests: one comment with the results and the tables (dependency
+  # review, hadolint, zizmor, smoke test), updated on every run. (Pull
   # requests from forks get a read-only token: no comment.)
   # When the code already passed (only the docs changed), the comment keeps
   # that run's results.
@@ -574,8 +621,8 @@ jobs:
     permissions:
       pull-requests: write # the comment
     steps:
-      # The scan tables: dependency review (dependencies), hadolint (lint) and
-      # zizmor (security).
+      # The tables: dependency review (dependencies), hadolint (lint), zizmor
+      # (security) and the smoke test (build).
       # One is missing when its job didn't get that far.
       - name: Get the scan tables
         continue-on-error: true
@@ -625,7 +672,7 @@ jobs:
             echo "| Fuzzing | $fuzz |"
             echo "| Image build and smoke test | $(icon "$BUILD") |"
             echo
-            for scan in dependency-review hadolint zizmor; do
+            for scan in dependency-review hadolint zizmor smoke; do
               if [ -f "$scan-summary.md" ]; then
                 cat "$scan-summary.md"
                 echo
