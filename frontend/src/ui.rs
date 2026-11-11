@@ -1665,7 +1665,7 @@ fn AboutDialog() -> impl IntoView {
     view! {
         <div class="dialog props" role="dialog" aria-label="About Narwhal">
             <div class="props-head">
-                <span class="bigicon" inner_html=include_str!("../favicon.svg")></span>
+                <span class="bigicon logo" inner_html=include_str!("../favicon.svg")></span>
                 <h2>"Narwhal"</h2>
             </div>
             <dl>

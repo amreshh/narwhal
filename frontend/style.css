@@ -436,6 +436,9 @@ kbd { font-family: var(--mono); font-size: 12px; }
 .props-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
 .props-head h2 { margin: 0; overflow-wrap: anywhere; }
 .bigicon { width: 48px; height: 48px; flex: none; }
+/* The logo in About: on the dialog itself in dark mode. Its cyan and green
+   need the dark tile on a light background, so light mode keeps it. */
+@media (prefers-color-scheme: dark) { .logo .bg { display: none; } }
 .props dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 0; }
 .props dt { color: var(--muted); text-align: right; }
 .props dd { margin: 0; overflow-wrap: anywhere; }
