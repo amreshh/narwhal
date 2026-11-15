@@ -35,7 +35,7 @@ One container, one port, ~5 MB image, ~650 KB of gzipped WASM.
 - **File operations**: new folder/file, inline rename (F2), cut/copy/paste, delete,
   upload (button or drag files and folders from your desktop), download, open in a new tab
 - **Reliable uploads**: every file is checked against a SHA-256 checksum on the server and only
-  appears once it arrived intact; interrupted, stalled or damaged files are retried automatically
+  appears once it has arrived intact; interrupted, stalled or damaged files are retried automatically
   (also after the network drops for a while). Several files go up in parallel (adjustable), and
   files added during an upload join its queue.
   Click the upload bar for each file's state, the speed and time left; any file (or all) can be cancelled there
@@ -64,7 +64,7 @@ The dark theme, which follows the OS, with a source file in the column view's pr
 ```
 shared/     serde types used by both sides (Entry, Listing, requests…)
 server/     Axum API + static file serving         → binary `narwhal`
-frontend/   Leptos CSR app built with Trunk         → frontend/dist
+frontend/   Leptos CSR app built with Trunk        → frontend/dist
               (src/columns.rs is the column view)
 office/     reads office documents for the previews (used by the frontend)
 deploy/     Kustomize manifests (namespace, PVC, Deployment, Service, Ingress)
@@ -224,7 +224,7 @@ shows both; a build without them is a development build.
   while a request runs can't lead outside the root either.
 - The app's pages are sent with a strict `Content-Security-Policy` (only its own
   scripts), `nosniff` and `Referrer-Policy: no-referrer`.
-- Invalid settings (e.g. `NARWHAL_READ_ONLY=ture`) stop the server at startup
+- Invalid settings (e.g. a misspelled `NARWHAL_READ_ONLY=ture`) stop the server at startup
   instead of silently falling back to a default.
 - Files opened "in a new tab" are served with `Content-Security-Policy: sandbox`
   and `nosniff`, so an uploaded HTML or SVG file cannot run scripts against the app.
