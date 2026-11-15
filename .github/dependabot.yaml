@@ -1,11 +1,10 @@
-# Dependabot version updates. Only read from the default branch (main);
-# PRs are opened against dev.
+# Dependabot version updates. Only read from the default branch (main), and
+# PRs are opened against it too (no target-branch). Merging one releases the
+# next patch version, like any merge into main; sync dev with main after.
 #
 # "Dependabot security updates" is also on in the repo settings: when a
 # dependency gets a vulnerability with a fix, a PR opens right away, without
-# the cooldown below. Those PRs always target main (they ignore
-# target-branch); the ci workflow checks and builds them there. Sync dev with
-# main after merging one.
+# the cooldown below. Those also target main.
 version: 2
 updates:
   # New releases wait a week before they're proposed, so a compromised one
@@ -13,7 +12,6 @@ updates:
   # they come from the security updates above.
   - package-ecosystem: cargo
     directory: /            # workspace root: shared, server, frontend + Cargo.lock
-    target-branch: dev
     schedule:
       interval: weekly
     cooldown:
@@ -26,7 +24,6 @@ updates:
   # version comment next to it.
   - package-ecosystem: github-actions
     directory: /
-    target-branch: dev
     schedule:
       interval: weekly
     cooldown:
@@ -40,7 +37,6 @@ updates:
   # No cooldown: those fixes shouldn't wait.
   - package-ecosystem: docker # zizmor: ignore[dependabot-cooldown]
     directory: /
-    target-branch: dev
     schedule:
       interval: weekly
     groups:
