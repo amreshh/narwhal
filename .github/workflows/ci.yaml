@@ -331,6 +331,14 @@ jobs:
         (github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.plan.outputs.version != '')) &&
       !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
     runs-on: ubuntu-24.04
+    # A push to dev with its pull request open builds the same commit twice:
+    # for the push (the dev tags) and for the pull request (the image it
+    # tests). Side by side, both compiled it. One at a time, the second finds
+    # every layer in BUILD_CACHE and compiles nothing. Pull requests build
+    # their head commit, not GitHub's merge commit (github.sha).
+    concurrency:
+      group: ${{ github.workflow }}-build-${{ github.event.pull_request.head.sha || github.sha }}
+      cancel-in-progress: false
     permissions:
       contents: read
       packages: write
